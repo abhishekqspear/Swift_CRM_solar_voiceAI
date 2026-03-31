@@ -1,0 +1,1536 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Swift Solar — Bot Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden}
+body{font-family:'Inter',system-ui,sans-serif;background:#0d1117;color:#e2e8f0;display:flex;flex-direction:column}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:#334155;border-radius:4px}
+
+/* ── Top-level layout ── */
+#app{display:flex;flex:1;overflow:hidden;min-height:0}
+#sidebar{width:248px;flex-shrink:0;background:#111827;border-right:1px solid #1e293b;display:flex;flex-direction:column;overflow:hidden}
+#main{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
+#tab-body{flex:1;overflow:hidden;min-height:0;display:flex;flex-direction:column}
+
+/* ── Tab panels ── */
+.tab-panel{display:none;flex:1;min-height:0;padding:16px 20px;overflow:hidden}
+.tab-panel.active{display:flex;flex-direction:column}
+
+/* ── Call tab: 2-column ── */
+#call-layout{display:grid;grid-template-columns:400px 1fr;gap:16px;flex:1;min-height:0;overflow:hidden}
+#call-left{overflow-y:auto;min-height:0}
+#call-right{display:flex;flex-direction:column;min-height:0;overflow:hidden}
+#call-right .card{flex:1;display:flex;flex-direction:column;margin-bottom:0;min-height:0;overflow:hidden}
+#call-right #log-list{flex:1;overflow-y:auto;min-height:0}
+
+/* ── Editor tab ── */
+#editor-layout{flex:1;min-height:0;overflow:hidden;display:flex;flex-direction:column}
+#editor-layout .card{flex:1;display:flex;flex-direction:column;min-height:0;margin-bottom:0;overflow:hidden}
+#editor-layout .card-body{flex:1;display:flex;flex-direction:column;min-height:0;overflow:hidden;gap:0}
+#ed-content-wrap{flex:1;display:flex;flex-direction:column;min-height:0;position:relative;margin-top:12px}
+#ed-content{min-height:0!important;flex:1;resize:none}
+
+/* ── Header ── */
+#topbar{height:54px;flex-shrink:0;background:#111827;border-bottom:1px solid #1e293b;display:flex;align-items:center;justify-content:space-between;padding:0 18px;gap:12px}
+#tabs{display:flex;background:#0d1117;border-bottom:1px solid #1e293b;flex-shrink:0;padding:0 6px}
+
+/* ── Tab buttons ── */
+.tab-btn{display:inline-flex;align-items:center;gap:7px;padding:0 16px;height:44px;font-size:13px;font-weight:500;color:#64748b;background:none;border:none;border-bottom:2px solid transparent;cursor:pointer;transition:color .15s,border-color .15s;white-space:nowrap}
+.tab-btn:hover{color:#cbd5e1}
+.tab-btn.active{color:#fbbf24;border-bottom-color:#f59e0b}
+
+/* ── Sidebar ── */
+#sidebar-header{padding:14px 12px 10px;border-bottom:1px solid #1e293b;flex-shrink:0;display:flex;flex-direction:column;gap:10px}
+#sidebar-header-top{display:flex;align-items:center;justify-content:space-between}
+#prompt-list{flex:1;overflow-y:auto;padding:6px 8px;display:flex;flex-direction:column;gap:3px}
+#sidebar-footer{padding:10px 12px;border-top:1px solid #1e293b;flex-shrink:0}
+
+/* ── Prompt items ── */
+.p-item{display:flex;align-items:center;gap:6px;padding:9px 10px;border-radius:8px;border:1px solid transparent;cursor:pointer;transition:background .1s,border-color .1s;position:relative}
+.p-item:hover{background:#161d27}
+.p-item.sel{background:rgba(245,158,11,.09);border-color:rgba(245,158,11,.28)}
+.p-item-info{flex:1;min-width:0}
+.p-item-name{font-size:12.5px;font-weight:500;color:#cbd5e1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.p-item.sel .p-item-name{color:#fbbf24}
+.p-item-meta{font-size:10.5px;color:#475569;margin-top:2px}
+.p-item-actions{display:flex;gap:2px;opacity:0;transition:opacity .12s;flex-shrink:0}
+.p-item:hover .p-item-actions,.p-item.sel .p-item-actions{opacity:1}
+
+/* ── Cards ── */
+.card{background:#161d27;border:1px solid #1e293b;border-radius:12px;overflow:hidden;margin-bottom:14px}
+.card:last-child{margin-bottom:0}
+.card-header{padding:12px 16px;border-bottom:1px solid #1e293b;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-shrink:0}
+.card-body{padding:16px 18px}
+
+/* ── Form groups ── */
+.field{margin-bottom:14px}
+.field:last-child{margin-bottom:0}
+label.lbl{display:block;font-size:11.5px;font-weight:600;color:#64748b;margin-bottom:5px;letter-spacing:.01em}
+input,select,textarea{width:100%;background:#1e293b;border:1px solid #2d3f55;border-radius:8px;padding:9px 12px;font-size:13.5px;color:#e2e8f0;outline:none;transition:border-color .15s,box-shadow .15s;font-family:inherit}
+input:focus,select:focus,textarea:focus{border-color:#f59e0b;box-shadow:0 0 0 3px rgba(245,158,11,.1)}
+input::placeholder,textarea::placeholder{color:#3d5068}
+select{cursor:pointer;appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 10px center;padding-right:32px}
+textarea{resize:none;font-family:'JetBrains Mono',monospace;font-size:12.5px;line-height:1.7;min-height:120px}
+input[type=number]{-moz-appearance:textfield}
+input[type=number]::-webkit-outer-spin-button,
+input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none}
+
+/* ── Field row (inline fields) ── */
+.field-row{display:grid;gap:12px;margin-bottom:14px}
+.field-row.cols-2{grid-template-columns:1fr 1fr}
+.field-row.cols-id{grid-template-columns:140px 1fr}
+.field-row .field{margin-bottom:0}
+
+/* ── Prompt select row ── */
+.select-row{display:flex;gap:8px;align-items:center}
+.select-row select{flex:1}
+
+/* ── Divider ── */
+.divider{height:1px;background:#1e293b;margin:16px 0}
+
+/* ── Buttons ── */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;border:none;border-radius:8px;cursor:pointer;font-size:13px;font-weight:500;transition:opacity .15s,box-shadow .15s,transform .1s;white-space:nowrap}
+.btn:active{transform:scale(.97)}
+.btn:disabled{opacity:.4;cursor:not-allowed;transform:none!important}
+.btn-primary{background:linear-gradient(135deg,#d97706,#f59e0b);color:#0d1117;font-weight:700;padding:10px 20px;box-shadow:0 2px 12px rgba(245,158,11,.28)}
+.btn-primary:hover:not(:disabled){box-shadow:0 4px 22px rgba(245,158,11,.42);opacity:.93}
+.btn-primary.full{width:100%;padding:11px 20px;font-size:14px}
+.btn-ghost{background:transparent;color:#94a3b8;padding:8px 13px;border:1px solid #2d3f55}
+.btn-ghost:hover{background:#1e293b;color:#e2e8f0;border-color:#475569}
+.btn-danger{background:rgba(239,68,68,.08);color:#f87171;padding:8px 13px;border:1px solid rgba(239,68,68,.2)}
+.btn-danger:hover{background:rgba(239,68,68,.16);border-color:rgba(239,68,68,.35)}
+.btn-sm{padding:6px 12px;font-size:12px;border-radius:7px}
+.btn-xs{padding:4px 9px;font-size:11.5px;border-radius:6px}
+.icon-btn{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:7px;border:none;background:transparent;cursor:pointer;color:#64748b;transition:background .12s,color .12s;flex-shrink:0}
+.icon-btn:hover{background:#1e293b;color:#e2e8f0}
+.icon-btn.amber:hover{color:#fbbf24}
+.icon-btn.red:hover{color:#f87171}
+.icon-btn.green:hover{color:#4ade80}
+.icon-btn.blue:hover{color:#60a5fa}
+.icon-btn-sm{width:26px;height:26px;border-radius:6px}
+
+/* ── Call CTA pulse ── */
+@keyframes cpulse{0%,100%{box-shadow:0 2px 12px rgba(245,158,11,.28)}50%{box-shadow:0 6px 26px rgba(245,158,11,.48)}}
+#btn-call:not(:disabled){animation:cpulse 2.5s ease-in-out infinite}
+#btn-call:not(:disabled):hover{animation:none}
+
+/* ── Badges ── */
+.badge{display:inline-flex;align-items:center;font-size:10.5px;font-weight:600;padding:2px 8px;border-radius:99px;border:1px solid}
+.b-amber{background:rgba(245,158,11,.1);color:#fbbf24;border-color:rgba(245,158,11,.22)}
+.b-green{background:rgba(74,222,128,.1);color:#4ade80;border-color:rgba(74,222,128,.2)}
+.b-red{background:rgba(248,113,113,.1);color:#f87171;border-color:rgba(248,113,113,.2)}
+.b-blue{background:rgba(96,165,250,.1);color:#60a5fa;border-color:rgba(96,165,250,.2)}
+.b-gray{background:rgba(100,116,139,.1);color:#94a3b8;border-color:rgba(100,116,139,.18)}
+
+/* ── Status dot ── */
+.dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;display:inline-block}
+.dot-green{background:#4ade80;animation:pulse 2s infinite}
+.dot-red{background:#f87171}
+.dot-gray{background:#475569}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(74,222,128,.45)}50%{box-shadow:0 0 0 5px rgba(74,222,128,0)}}
+
+/* ── Spinner ── */
+.spin{animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ── Call log ── */
+.log-row{border-bottom:1px solid #0d1117}
+.log-row:last-child{border-bottom:none}
+.log-summary{display:flex;align-items:center;gap:10px;padding:10px 16px;cursor:pointer;user-select:none;list-style:none;transition:background .1s}
+.log-summary::-webkit-details-marker{display:none}
+.log-summary:hover{background:#1a2235}
+.log-detail{background:#0a0f15;border-top:1px solid #1e293b;padding:12px 16px}
+.log-detail pre{font-family:'JetBrains Mono',monospace;font-size:11px;color:#64748b;line-height:1.65;white-space:pre-wrap;word-break:break-all}
+.log-chevron{transition:transform .2s;color:#334155;flex-shrink:0;margin-left:2px}
+details[open] .log-chevron{transform:rotate(180deg)}
+.log-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:52px 20px;color:#334155;gap:10px}
+.log-empty-icon{font-size:32px}
+.log-empty-text{font-size:13px;color:#3d5068}
+
+/* ── Recent phones ── */
+#recent-wrap{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:8px;min-height:0}
+.recent-label{font-size:10.5px;color:#3d5068;font-weight:500}
+.recent-chip{font-family:'JetBrains Mono',monospace;font-size:10.5px;cursor:pointer;background:#111827;border:1px solid #2d3f55;color:#94a3b8;padding:3px 9px;border-radius:99px;transition:border-color .12s,color .12s}
+.recent-chip:hover{border-color:#f59e0b;color:#fbbf24}
+
+/* ── Preview box ── */
+#preview-box{display:none;margin-top:10px;background:#0a0f15;border:1px solid #1e293b;border-radius:8px;padding:10px 13px;font-family:'JetBrains Mono',monospace;font-size:11.5px;color:#64748b;line-height:1.65;max-height:120px;overflow-y:auto;white-space:pre-wrap;word-break:break-word}
+
+/* ── Toast ── */
+#toasts{position:fixed;bottom:18px;right:18px;z-index:999;display:flex;flex-direction:column;gap:8px;pointer-events:none}
+.toast{pointer-events:auto;display:flex;align-items:flex-start;gap:10px;padding:11px 15px;border-radius:10px;border:1px solid;font-size:13px;max-width:340px;box-shadow:0 8px 28px rgba(0,0,0,.5);animation:tin .22s cubic-bezier(.34,1.56,.64,1);transition:opacity .3s}
+@keyframes tin{from{opacity:0;transform:translateX(12px) scale(.96)}to{opacity:1;transform:none}}
+.t-ok{background:#052e16;border-color:#166534;color:#4ade80}
+.t-err{background:#2a0a0a;border-color:#7f1d1d;color:#f87171}
+.t-info{background:#0f172a;border-color:#1e293b;color:#94a3b8}
+.t-warn{background:#1c1102;border-color:#854d0e;color:#fbbf24}
+.toast-icon{font-weight:700;font-size:15px;flex-shrink:0;line-height:1.2}
+.toast-msg{color:#e2e8f0;line-height:1.45}
+
+/* ── Editor stats bar ── */
+#ed-stats-bar{display:flex;align-items:center;gap:10px;padding:8px 18px;border-top:1px solid #1e293b;flex-shrink:0;background:#111827}
+#ed-stats-bar span{font-size:11px;color:#334155;font-family:'JetBrains Mono',monospace}
+
+/* ── Misc ── */
+.sec-label{font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#3d5068}
+.gradient-text{background:linear-gradient(135deg,#fbbf24,#f59e0b);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.unsaved-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#f59e0b;margin-left:5px;vertical-align:middle}
+.search-wrap{position:relative}
+.search-wrap svg{position:absolute;left:9px;top:50%;transform:translateY(-50%);pointer-events:none;color:#3d5068}
+.search-wrap input{padding-left:30px;font-size:12px;background:#0d1117;border-color:#1e293b;border-radius:7px}
+.search-wrap input:focus{border-color:#f59e0b}
+.info-err{font-size:11.5px;color:#f87171;margin-top:4px;display:none}
+mark{background:rgba(245,158,11,.2);color:#fbbf24;border-radius:2px}
+code{font-family:'JetBrains Mono',monospace;font-size:11.5px;background:#1e293b;padding:1px 6px;border-radius:4px;color:#fbbf24}
+.card-title{font-size:13.5px;font-weight:600;color:#f1f5f9}
+.row{display:flex;align-items:center;gap:8px}
+.spacer{flex:1}
+
+/* ── AI Generator modal ── */
+#modal-gen .gen-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+#modal-gen .gen-grid .span2{grid-column:1/-1}
+#gen-btn{background:linear-gradient(135deg,#6d28d9,#7c3aed);color:#fff;font-weight:700;padding:10px 20px;border:none;border-radius:8px;font-size:13.5px;cursor:pointer;display:inline-flex;align-items:center;gap:8px;transition:opacity .15s,box-shadow .15s}
+#gen-btn:hover:not(:disabled){box-shadow:0 4px 20px rgba(124,58,237,.45);opacity:.93}
+#gen-btn:disabled{opacity:.45;cursor:not-allowed}
+.ai-badge{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;letter-spacing:.05em;background:linear-gradient(135deg,rgba(109,40,217,.25),rgba(124,58,237,.15));color:#a78bfa;border:1px solid rgba(124,58,237,.3);padding:3px 10px;border-radius:99px}
+#gen-progress{display:none;align-items:center;gap:10px;padding:12px 16px;background:#0a0813;border:1px solid rgba(124,58,237,.25);border-radius:8px;font-size:13px;color:#a78bfa;margin-top:10px}
+#gen-progress .spin{color:#7c3aed}
+.tone-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.tone-opt{display:none}
+.tone-lbl{display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 6px;border-radius:8px;border:1px solid #2d3f55;cursor:pointer;font-size:11.5px;color:#64748b;transition:border-color .15s,background .15s,color .15s;text-align:center}
+.tone-lbl span.icon{font-size:18px}
+.tone-opt:checked + .tone-lbl{border-color:#7c3aed;background:rgba(124,58,237,.12);color:#a78bfa}
+.lang-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.lang-opt{display:none}
+.lang-lbl{display:flex;flex-direction:column;align-items:center;gap:3px;padding:7px 4px;border-radius:8px;border:1px solid #2d3f55;cursor:pointer;font-size:11px;color:#64748b;transition:border-color .15s,background .15s,color .15s;text-align:center}
+.lang-lbl span.flag{font-size:16px}
+.lang-opt:checked + .lang-lbl{border-color:#f59e0b;background:rgba(245,158,11,.1);color:#fbbf24}
+</style>
+</head>
+
+<body>
+
+<!-- ══ TOP BAR ══════════════════════════════════════════════════════════════ -->
+<header id="topbar">
+  <div class="row" style="gap:12px">
+    <div style="width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,#d97706,#fbbf24);display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">☀️</div>
+    <div>
+      <div style="font-size:14px;font-weight:700;color:#f1f5f9;line-height:1.1">Swift Solar</div>
+      <div style="font-size:10.5px;color:#3d5068;margin-top:1px">Bot Management Dashboard</div>
+    </div>
+  </div>
+
+  <div class="row" style="gap:16px;font-size:12px;color:#64748b">
+    <!-- Stats pills -->
+    <div class="row" style="gap:14px">
+      <span><span id="stat-p" class="gradient-text" style="font-weight:700;font-size:13px">—</span><span style="margin-left:4px">prompts</span></span>
+      <div style="width:1px;height:14px;background:#1e293b"></div>
+      <span><span id="stat-c" style="color:#60a5fa;font-weight:700;font-size:13px">—</span><span style="margin-left:4px">calls</span></span>
+      <div style="width:1px;height:14px;background:#1e293b"></div>
+      <span><span id="stat-ok" style="color:#4ade80;font-weight:700;font-size:13px">—</span><span style="margin-left:4px;color:#4ade80">ok</span></span>
+      <div style="width:1px;height:14px;background:#1e293b"></div>
+      <span><span id="stat-fail" style="color:#f87171;font-weight:700;font-size:13px">—</span><span style="margin-left:4px;color:#f87171">failed</span></span>
+    </div>
+
+    <div style="width:1px;height:22px;background:#1e293b"></div>
+
+    <!-- Server status pill -->
+    <div class="row" style="gap:7px;background:#0d1117;border:1px solid #1e293b;border-radius:99px;padding:5px 12px">
+      <span id="sdot" class="dot dot-gray"></span>
+      <span id="stxt" style="font-size:11.5px;font-weight:500;color:#64748b">Connecting…</span>
+    </div>
+
+    <!-- Actions -->
+    <button id="btn-refresh" class="icon-btn" title="Refresh prompts" onclick="loadPrompts()">
+      <svg id="refresh-icon" width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+    </button>
+    <button class="icon-btn" title="Keyboard shortcuts" onclick="showModal('modal-keys')">
+      <svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
+    </button>
+  </div>
+</header>
+
+
+<!-- ══ BODY ═════════════════════════════════════════════════════════════════ -->
+<div id="app">
+
+  <!-- ── SIDEBAR ─────────────────────────────────────────────────────────── -->
+  <aside id="sidebar">
+    <div id="sidebar-header">
+      <div id="sidebar-header-top">
+        <div class="row" style="gap:7px">
+          <span class="sec-label">Prompts</span>
+          <span id="pcnt" class="badge b-amber" style="font-size:10px;padding:1px 7px">0</span>
+        </div>
+        <button id="btn-new" class="btn btn-primary btn-xs" onclick="openEditorNew()">
+          <svg width="10" height="10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M12 4v16m8-8H4"/></svg>
+          New
+        </button>
+      </div>
+      <div class="search-wrap">
+        <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0"/></svg>
+        <input id="search" type="text" placeholder="Search prompts…" oninput="renderSidebar()"/>
+      </div>
+    </div>
+
+    <ul id="prompt-list">
+      <li id="list-empty" style="text-align:center;padding:32px 12px;font-size:12px;color:#3d5068;line-height:1.7">
+        No prompts yet.<br/>Click <b style="color:#64748b">New</b> to create one.
+      </li>
+    </ul>
+
+    <div id="sidebar-footer">
+      <label style="display:flex;align-items:center;justify-content:center;gap:7px;font-size:12px;color:#3d5068;cursor:pointer;padding:8px;border-radius:8px;border:1px dashed #2d3f55;transition:border-color .15s,color .15s"
+        onmouseover="this.style.borderColor='#f59e0b';this.style.color='#fbbf24'"
+        onmouseout="this.style.borderColor='#2d3f55';this.style.color='#3d5068'">
+        <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+        Import .txt
+        <input type="file" accept=".txt" style="display:none" onchange="importFile(event)"/>
+      </label>
+    </div>
+  </aside>
+
+
+  <!-- ── MAIN ────────────────────────────────────────────────────────────── -->
+  <div id="main">
+
+    <!-- Tabs -->
+    <div id="tabs">
+      <button class="tab-btn active" data-tab="call">
+        <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z"/></svg>
+        Make a Call
+      </button>
+      <button class="tab-btn" data-tab="editor">
+        <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+        Prompt Editor
+        <span id="unsaved" class="unsaved-dot" style="display:none"></span>
+      </button>
+      <button class="tab-btn" data-tab="leads">
+        <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"/></svg>
+        Leads
+        <span id="leads-badge" class="badge b-green" style="display:none;font-size:10px;padding:1px 7px;margin-left:2px">0</span>
+      </button>
+    </div>
+
+    <!-- Tab body -->
+    <div id="tab-body">
+
+      <!-- ═══ TAB: CALL ═══════════════════════════════════════════════════ -->
+      <div id="tab-call" class="tab-panel active">
+        <div id="call-layout">
+
+          <!-- LEFT: Call form -->
+          <div id="call-left">
+          <div class="card">
+            <div class="card-header">
+              <div class="row" style="gap:8px">
+                <svg width="14" height="14" fill="none" stroke="#f59e0b" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z"/></svg>
+                <span class="card-title">New Outbound Call</span>
+              </div>
+              <kbd style="font-size:10.5px;color:#3d5068;background:#0d1117;border:1px solid #1e293b;padding:2px 8px;border-radius:5px;font-family:'JetBrains Mono',monospace">Ctrl+Enter</kbd>
+            </div>
+
+            <div class="card-body" style="display:flex;flex-direction:column">
+
+              <!-- Phone -->
+              <div class="field">
+                <label class="lbl">Phone Number <span style="color:#f87171">*</span></label>
+                <input id="inp-phone" type="tel" placeholder="+919876543210"/>
+                <div id="phone-err" class="info-err">Enter E.164 format, e.g. +919876543210</div>
+                <!-- Recent phones directly below phone input -->
+                <div id="recent-wrap"></div>
+              </div>
+
+              <!-- Name + Customer ID -->
+              <div class="field-row cols-2">
+                <div class="field">
+                  <label class="lbl">Customer Name</label>
+                  <input id="inp-name" type="text" placeholder="Rahul Sharma"/>
+                </div>
+                <div class="field">
+                  <label class="lbl">Customer ID</label>
+                  <input id="inp-cid" type="number" placeholder="42"/>
+                </div>
+              </div>
+
+              <!-- Callback URL — full width -->
+              <div class="field">
+                <label class="lbl">Callback URL</label>
+                <input id="inp-callback" type="url" placeholder="https://your-service.com/webhook"/>
+              </div>
+
+              <div class="divider"></div>
+
+              <!-- Instruction ID -->
+              <div class="field">
+                <label class="lbl">Instruction ID <span style="color:#3d5068;font-weight:400">(system prompt file)</span></label>
+                <div class="select-row">
+                  <select id="inp-prompt">
+                    <option value="">(use server default)</option>
+                  </select>
+                  <button class="icon-btn blue icon-btn-sm" id="btn-preview" title="Preview prompt" onclick="togglePreview()">
+                    <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                  </button>
+                  <button class="icon-btn amber icon-btn-sm" title="Edit prompt" onclick="editSelectedPrompt()">
+                    <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                  </button>
+                </div>
+                <div id="preview-box"></div>
+              </div>
+
+              <!-- CTA -->
+              <button id="btn-call" class="btn btn-primary full" style="margin-top:4px" onclick="makeCall()">
+                <svg id="call-icon" width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z"/></svg>
+                <svg id="call-spin" class="spin" width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="display:none"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                Make Call
+              </button>
+
+            </div>
+          </div>
+          </div><!-- end call-left -->
+
+          <!-- RIGHT: Call history -->
+          <div id="call-right">
+          <div class="card">
+            <div class="card-header">
+              <div class="row" style="gap:8px">
+                <svg width="14" height="14" fill="none" stroke="#60a5fa" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                <span class="card-title">Call History</span>
+                <span id="log-cnt" class="badge b-blue">0</span>
+              </div>
+              <div class="row" style="gap:6px">
+                <button class="btn btn-ghost btn-xs" onclick="exportLog()">
+                  <svg width="11" height="11" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+                  Export
+                </button>
+                <button class="btn btn-xs" style="background:transparent;color:#f87171;border:1px solid rgba(248,113,113,.2);padding:4px 9px;font-size:11.5px;border-radius:6px" onclick="clearLog()">Clear</button>
+              </div>
+            </div>
+            <ul id="log-list" style="flex:1;overflow-y:auto;min-height:0">
+              <li id="log-empty" class="log-empty">
+                <div class="log-empty-icon">📞</div>
+                <div class="log-empty-text">No calls this session</div>
+              </li>
+            </ul>
+          </div>
+          </div><!-- end call-right -->
+
+        </div><!-- end call-layout -->
+      </div><!-- end tab-call -->
+
+
+      <!-- ═══ TAB: EDITOR ════════════════════════════════════════════════ -->
+      <div id="tab-editor" class="tab-panel">
+        <div id="editor-layout">
+
+          <div class="card">
+            <!-- Editor header: title + action buttons -->
+            <div class="card-header">
+              <div class="row" style="gap:8px">
+                <svg width="14" height="14" fill="none" stroke="#a78bfa" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                <span id="ed-title" class="card-title">New Prompt</span>
+                <span id="ed-badge" class="badge b-gray" style="display:none"></span>
+              </div>
+              <div class="row" style="gap:6px">
+                <span id="ed-stats" style="font-size:11.5px;color:#3d5068;font-family:'JetBrains Mono',monospace"></span>
+                <button class="btn btn-sm ai-badge" onclick="showModal('modal-gen')" style="background:linear-gradient(135deg,rgba(109,40,217,.2),rgba(124,58,237,.12));border:1px solid rgba(124,58,237,.3);color:#a78bfa;padding:5px 12px">
+                  <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
+                  Generate with AI
+                </button>
+                <button id="btn-export-p" class="icon-btn blue" title="Download .txt" onclick="exportPrompt()" style="display:none">
+                  <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+                </button>
+                <button id="btn-dup" class="icon-btn amber" title="Duplicate" onclick="dupPrompt()" style="display:none">
+                  <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+                </button>
+                <div style="width:1px;height:18px;background:#1e293b"></div>
+                <button class="btn btn-primary btn-sm" onclick="savePrompt()">
+                  <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"/></svg>
+                  Save
+                </button>
+                <button id="btn-del" class="btn btn-danger btn-sm" onclick="deleteActive()" style="display:none">
+                  <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                  Delete
+                </button>
+              </div>
+            </div>
+
+            <div class="card-body">
+
+              <!-- Name field row -->
+              <div class="field-row" style="margin-bottom:12px;align-items:flex-end">
+                <div class="field" style="margin-bottom:0;flex:1">
+                  <label class="lbl">Prompt Name <span style="color:#f87171">*</span></label>
+                  <input id="ed-name" type="text" placeholder="solar_leads_v2" oninput="markUnsaved()"/>
+                </div>
+              </div>
+
+              <!-- Template vars row -->
+              <div class="row" style="gap:8px;margin-bottom:10px;flex-wrap:wrap">
+                <span style="font-size:11.5px;color:#3d5068">Insert variable:</span>
+                <button class="badge b-amber" style="cursor:pointer;font-family:'JetBrains Mono',monospace;font-size:10.5px;background:rgba(245,158,11,.07);border:1px solid rgba(245,158,11,.2);padding:3px 10px;border-radius:5px" title="Click to insert at cursor" onclick="insertVar('{customer_name}')">
+                  {customer_name}
+                </button>
+                <span id="ed-hint" style="font-size:11px;color:#3d5068;margin-left:auto"></span>
+                <span id="ed-savedat" style="font-size:11px;color:#3d5068"></span>
+              </div>
+
+              <!-- Textarea — fills remaining space -->
+              <div id="ed-content-wrap">
+                <textarea id="ed-content" placeholder="Enter your system prompt here…
+
+{customer_name} is replaced with the caller's name at runtime." oninput="onEditorInput()"></textarea>
+                <div style="position:absolute;bottom:9px;right:11px;display:flex;gap:8px;pointer-events:none">
+                  <span id="ed-lines" style="font-size:10px;color:#2d3f55;font-family:'JetBrains Mono',monospace"></span>
+                  <span id="ed-words" style="font-size:10px;color:#2d3f55;font-family:'JetBrains Mono',monospace"></span>
+                  <span id="ed-chars" style="font-size:10px;color:#2d3f55;font-family:'JetBrains Mono',monospace"></span>
+                </div>
+              </div>
+
+            </div>
+          </div>
+
+        </div><!-- end editor-layout -->
+      </div><!-- end tab-editor -->
+
+      <!-- ═══ TAB: LEADS ════════════════════════════════════════════════ -->
+      <div id="tab-leads" class="tab-panel">
+        <div style="flex:1;min-height:0;overflow:hidden;display:flex;flex-direction:column;gap:14px">
+
+          <!-- Info bar -->
+          <div class="card" style="flex-shrink:0;margin-bottom:0">
+            <div class="card-body" style="padding:12px 18px">
+              <div class="row" style="gap:12px;flex-wrap:wrap">
+                <div>
+                  <div class="sec-label" style="margin-bottom:4px">Local Webhook Endpoint</div>
+                  <div class="row" style="gap:8px">
+                    <code id="webhook-url" style="font-size:12px;user-select:all"></code>
+                    <button class="btn btn-ghost btn-xs" onclick="copyWebhookUrl()">Copy</button>
+                    <button class="btn btn-ghost btn-xs" onclick="useAsCallback()">Use in Call Form</button>
+                  </div>
+                  <div style="font-size:11px;color:#3d5068;margin-top:4px">Set this as <code>callback_url</code> when making a call — lead data will appear here automatically.</div>
+                </div>
+                <div class="spacer"></div>
+                <div class="row" style="gap:8px;align-self:flex-end">
+                  <button class="btn btn-ghost btn-sm" onclick="loadLeads()">
+                    <svg id="leads-refresh-icon" width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                    Refresh
+                  </button>
+                  <button class="btn btn-xs" style="background:transparent;color:#f87171;border:1px solid rgba(248,113,113,.2);padding:4px 9px;font-size:11.5px;border-radius:6px" onclick="clearLeads()">Clear</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Leads list -->
+          <div class="card" style="flex:1;min-height:0;overflow:hidden;display:flex;flex-direction:column;margin-bottom:0">
+            <div class="card-header">
+              <div class="row" style="gap:8px">
+                <svg width="14" height="14" fill="none" stroke="#4ade80" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                <span class="card-title">Received Leads</span>
+                <span id="leads-cnt" class="badge b-green">0</span>
+              </div>
+              <button class="btn btn-ghost btn-xs" onclick="exportLeads()">
+                <svg width="11" height="11" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+                Export JSON
+              </button>
+            </div>
+            <div id="leads-list" style="flex:1;overflow-y:auto;min-height:0">
+              <div id="leads-empty" class="log-empty">
+                <div class="log-empty-icon">📋</div>
+                <div class="log-empty-text">No leads yet — set the local endpoint as your callback URL</div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div><!-- end tab-leads -->
+
+    </div><!-- end tab-body -->
+  </div><!-- end main -->
+</div><!-- end app -->
+
+
+<!-- ══ MODALS ════════════════════════════════════════════════════════════════ -->
+<!-- ══ AI GENERATOR MODAL ═════════════════════════════════════════════════════ -->
+<div id="modal-gen" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:200;align-items:center;justify-content:center;padding:20px;overflow-y:auto" onclick="if(event.target===this)hideModal('modal-gen')">
+  <div style="background:#161d27;border:1px solid rgba(124,58,237,.3);border-radius:16px;max-width:680px;width:100%;display:flex;flex-direction:column;box-shadow:0 24px 64px rgba(0,0,0,.6)">
+
+    <!-- Modal header -->
+    <div style="padding:16px 20px;border-bottom:1px solid #1e293b;display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
+      <div class="row" style="gap:10px">
+        <div style="width:32px;height:32px;border-radius:8px;background:linear-gradient(135deg,#6d28d9,#7c3aed);display:flex;align-items:center;justify-content:center;flex-shrink:0">
+          <svg width="16" height="16" fill="none" stroke="#fff" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
+        </div>
+        <div>
+          <div style="font-size:14px;font-weight:700;color:#f1f5f9">AI Prompt Generator</div>
+          <div style="font-size:11px;color:#475569;margin-top:1px">Powered by Gemini 2.0 Flash</div>
+        </div>
+      </div>
+      <button class="icon-btn" onclick="hideModal('modal-gen')">
+        <svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+
+    <!-- Form body -->
+    <div style="padding:20px;overflow-y:auto">
+      <div class="gen-grid">
+
+        <!-- Use case — full width -->
+        <div class="field span2">
+          <label class="lbl">What should this bot do? <span style="color:#f87171">*</span></label>
+          <textarea id="gen-use-case" rows="3" placeholder="e.g. Qualify inbound solar panel installation leads — gather location, property type, electricity bill, roof details and ownership, then book a free site visit for high-quality leads." style="min-height:72px"></textarea>
+        </div>
+
+        <!-- Company + Bot name -->
+        <div class="field">
+          <label class="lbl">Company Name</label>
+          <input id="gen-company" type="text" placeholder="Swift Solar"/>
+        </div>
+        <div class="field">
+          <label class="lbl">Bot / Persona Name</label>
+          <input id="gen-botname" type="text" placeholder="Swift"/>
+        </div>
+
+        <!-- Language -->
+        <div class="field span2">
+          <label class="lbl" style="margin-bottom:8px">Language</label>
+          <div class="lang-grid">
+            <div><input type="radio" name="gen-lang" id="lang-auto" value="auto" class="lang-opt" checked/><label for="lang-auto" class="lang-lbl"><span class="flag">🌐</span>Auto-detect</label></div>
+            <div><input type="radio" name="gen-lang" id="lang-en" value="english" class="lang-opt"/><label for="lang-en" class="lang-lbl"><span class="flag">🇬🇧</span>English</label></div>
+            <div><input type="radio" name="gen-lang" id="lang-hi" value="hindi" class="lang-opt"/><label for="lang-hi" class="lang-lbl"><span class="flag">🇮🇳</span>Hindi</label></div>
+            <div><input type="radio" name="gen-lang" id="lang-hh" value="hinglish" class="lang-opt"/><label for="lang-hh" class="lang-lbl"><span class="flag">🤝</span>Hinglish</label></div>
+          </div>
+        </div>
+
+        <!-- Tone -->
+        <div class="field span2">
+          <label class="lbl" style="margin-bottom:8px">Conversation Tone</label>
+          <div class="tone-grid">
+            <div><input type="radio" name="gen-tone" id="tone-friendly" value="friendly" class="tone-opt" checked/><label for="tone-friendly" class="tone-lbl"><span class="icon">😊</span>Friendly</label></div>
+            <div><input type="radio" name="gen-tone" id="tone-pro" value="professional" class="tone-opt"/><label for="tone-pro" class="tone-lbl"><span class="icon">💼</span>Professional</label></div>
+            <div><input type="radio" name="gen-tone" id="tone-casual" value="casual" class="tone-opt"/><label for="tone-casual" class="tone-lbl"><span class="icon">🙌</span>Casual</label></div>
+            <div><input type="radio" name="gen-tone" id="tone-assertive" value="assertive" class="tone-opt"/><label for="tone-assertive" class="tone-lbl"><span class="icon">🎯</span>Assertive</label></div>
+          </div>
+        </div>
+
+        <!-- Fields to collect -->
+        <div class="field span2">
+          <label class="lbl">Information to Collect <span style="color:#3d5068;font-weight:400">(leave blank to let AI decide)</span></label>
+          <textarea id="gen-fields" rows="2" placeholder="e.g. location, property type, monthly electricity bill, roof type, ownership status"></textarea>
+        </div>
+
+        <!-- Qualification criteria -->
+        <div class="field span2">
+          <label class="lbl">Qualification Criteria <span style="color:#3d5068;font-weight:400">(optional)</span></label>
+          <textarea id="gen-qual" rows="2" placeholder="e.g. owns the property, electricity bill > ₹3000/month, shows clear interest in solar"></textarea>
+        </div>
+
+        <!-- Additional context -->
+        <div class="field span2">
+          <label class="lbl">Additional Context / Constraints <span style="color:#3d5068;font-weight:400">(optional)</span></label>
+          <textarea id="gen-ctx" rows="2" placeholder="e.g. Focus on Delhi-NCR region. Mention 40% government subsidy. Avoid competitor comparisons."></textarea>
+        </div>
+
+      </div>
+
+      <!-- Progress indicator -->
+      <div id="gen-progress">
+        <svg class="spin" width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+        <span>Gemini is crafting your system prompt…</span>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <div style="padding:14px 20px;border-top:1px solid #1e293b;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;gap:10px">
+      <span style="font-size:11.5px;color:#3d5068">Generated prompt will open in the editor for review before saving.</span>
+      <div class="row" style="gap:8px">
+        <button class="btn btn-ghost btn-sm" onclick="hideModal('modal-gen')">Cancel</button>
+        <button id="gen-btn" onclick="runGenerate()">
+          <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+          Generate Prompt
+        </button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div id="modal-keys" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:200;align-items:center;justify-content:center;padding:20px" onclick="if(event.target===this)hideModal('modal-keys')">
+  <div style="background:#161d27;border:1px solid #1e293b;border-radius:14px;padding:22px;max-width:380px;width:100%">
+    <div class="row" style="justify-content:space-between;margin-bottom:16px">
+      <span style="font-size:14px;font-weight:700;color:#f1f5f9">Keyboard Shortcuts</span>
+      <button class="icon-btn" onclick="hideModal('modal-keys')">
+        <svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:6px;font-size:13px">
+      <div class="row" style="justify-content:space-between;padding:8px 11px;background:#0d1117;border-radius:7px"><span style="color:#94a3b8">Make call</span><kbd style="background:#1e293b;border:1px solid #334155;border-radius:5px;padding:2px 9px;font-family:'JetBrains Mono',monospace;font-size:11px;color:#e2e8f0">Ctrl+Enter</kbd></div>
+      <div class="row" style="justify-content:space-between;padding:8px 11px;background:#0d1117;border-radius:7px"><span style="color:#94a3b8">New prompt</span><kbd style="background:#1e293b;border:1px solid #334155;border-radius:5px;padding:2px 9px;font-family:'JetBrains Mono',monospace;font-size:11px;color:#e2e8f0">Ctrl+N</kbd></div>
+      <div class="row" style="justify-content:space-between;padding:8px 11px;background:#0d1117;border-radius:7px"><span style="color:#94a3b8">Save prompt</span><kbd style="background:#1e293b;border:1px solid #334155;border-radius:5px;padding:2px 9px;font-family:'JetBrains Mono',monospace;font-size:11px;color:#e2e8f0">Ctrl+S</kbd></div>
+      <div class="row" style="justify-content:space-between;padding:8px 11px;background:#0d1117;border-radius:7px"><span style="color:#94a3b8">Close modals / preview</span><kbd style="background:#1e293b;border:1px solid #334155;border-radius:5px;padding:2px 9px;font-family:'JetBrains Mono',monospace;font-size:11px;color:#e2e8f0">Esc</kbd></div>
+    </div>
+  </div>
+</div>
+
+<div id="modal-preview" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:200;align-items:center;justify-content:center;padding:20px" onclick="if(event.target===this)hideModal('modal-preview')">
+  <div style="background:#161d27;border:1px solid #1e293b;border-radius:14px;max-width:660px;width:100%;max-height:82vh;display:flex;flex-direction:column">
+    <div style="padding:14px 18px;border-bottom:1px solid #1e293b;display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
+      <span id="prev-title" style="font-size:13px;font-weight:600;color:#f1f5f9;font-family:'JetBrains Mono',monospace"></span>
+      <div class="row" style="gap:6px">
+        <button class="btn btn-ghost btn-xs" onclick="copyPreviewContent()">
+          <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+          Copy
+        </button>
+        <button class="icon-btn" onclick="hideModal('modal-preview')">
+          <svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+    </div>
+    <pre id="prev-content" style="flex:1;overflow-y:auto;padding:16px 18px;font-family:'JetBrains Mono',monospace;font-size:12px;color:#94a3b8;line-height:1.75;white-space:pre-wrap;word-break:break-word"></pre>
+  </div>
+</div>
+
+<div id="toasts"></div>
+
+
+<!-- ══ SCRIPT ════════════════════════════════════════════════════════════════ -->
+<script>
+// ── State ─────────────────────────────────────────────────────────────────────
+let prompts = [];
+let activeName = null;   // sidebar / editor current name
+let isNew = true;
+let dirty = false;
+let callLog = [];
+let recentPhones = [];
+
+try { callLog = JSON.parse(sessionStorage.getItem('callLog') || '[]'); } catch {}
+try { recentPhones = JSON.parse(localStorage.getItem('recentPhones') || '[]'); } catch {}
+
+// ── API ───────────────────────────────────────────────────────────────────────
+async function api(method, path, body) {
+  const init = { method, headers: { 'Content-Type': 'application/json' } };
+  if (body !== undefined) init.body = JSON.stringify(body);
+  const r = await fetch(path, init);
+  if (r.status === 204) return null;
+  const d = await r.json();
+  if (!r.ok) throw new Error(d.detail || 'HTTP ' + r.status);
+  return d;
+}
+
+// ── Toast ─────────────────────────────────────────────────────────────────────
+function toast(msg, type = 'info') {
+  const map = { ok: ['t-ok','✓'], err: ['t-err','✗'], info: ['t-info','ℹ'], warn: ['t-warn','⚠'] };
+  const [cls, icon] = map[type] || map.info;
+  const el = document.createElement('div');
+  el.className = 'toast ' + cls;
+  el.innerHTML = `<span class="toast-icon">${icon}</span><span class="toast-msg">${esc(msg)}</span>`;
+  document.getElementById('toasts').appendChild(el);
+  const ttl = type === 'err' ? 6000 : 3500;
+  setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 350); }, ttl - 350);
+}
+
+// ── Utils ─────────────────────────────────────────────────────────────────────
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+                  .replace(/"/g,'&quot;').replace(/'/g,'&#039;');
+}
+function fmtTime(ts) { return new Date(ts).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}); }
+function fmtDate(ts) { return new Date(ts).toLocaleDateString([],{month:'short',day:'numeric'}); }
+function fmtBytes(n) { return n < 1024 ? n + ' B' : (n/1024).toFixed(1) + ' KB'; }
+function validPhone(n) { return /^\+[1-9]\d{6,14}$/.test(n.trim()); }
+
+// ── Modal ─────────────────────────────────────────────────────────────────────
+function showModal(id) { document.getElementById(id).style.display = 'flex'; }
+function hideModal(id) { document.getElementById(id).style.display = 'none'; }
+
+// ── Tabs ─────────────────────────────────────────────────────────────────────
+function switchTab(name) {
+  document.querySelectorAll('.tab-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.tab === name));
+  document.querySelectorAll('.tab-panel').forEach(p =>
+    p.classList.toggle('active', p.id === 'tab-' + name));
+}
+document.querySelectorAll('.tab-btn').forEach(b =>
+  b.addEventListener('click', () => switchTab(b.dataset.tab)));
+
+// ── Health ────────────────────────────────────────────────────────────────────
+async function checkHealth() {
+  const dot = document.getElementById('sdot');
+  const txt = document.getElementById('stxt');
+  try {
+    await api('GET', '/api/prompts');
+    dot.className = 'dot dot-green';
+    txt.textContent = 'Connected'; txt.style.color = '#4ade80';
+  } catch {
+    dot.className = 'dot dot-red';
+    txt.textContent = 'Offline'; txt.style.color = '#f87171';
+  }
+}
+
+// ── Stats ─────────────────────────────────────────────────────────────────────
+function updateStats() {
+  document.getElementById('stat-p').textContent = prompts.length;
+  document.getElementById('stat-c').textContent = callLog.length;
+  document.getElementById('stat-ok').textContent = callLog.filter(c => c.ok).length;
+  document.getElementById('stat-fail').textContent = callLog.filter(c => !c.ok).length;
+  document.getElementById('pcnt').textContent = prompts.length;
+  document.getElementById('log-cnt').textContent = callLog.length;
+}
+
+// ── Load prompts ──────────────────────────────────────────────────────────────
+async function loadPrompts() {
+  const ri = document.getElementById('refresh-icon');
+  ri.classList.add('spin');
+  try {
+    prompts = await api('GET', '/api/prompts');
+    renderSidebar();
+    renderDropdown();
+    updateStats();
+  } catch(e) {
+    toast('Could not load prompts: ' + e.message, 'err');
+  } finally {
+    ri.classList.remove('spin');
+  }
+}
+
+// ── Sidebar ───────────────────────────────────────────────────────────────────
+function renderSidebar() {
+  const ul = document.getElementById('prompt-list');
+  const empty = document.getElementById('list-empty');
+  [...ul.querySelectorAll('.p-item')].forEach(el => el.remove());
+
+  const q = document.getElementById('search').value.toLowerCase();
+  const filtered = q ? prompts.filter(p => p.name.toLowerCase().includes(q)) : prompts;
+
+  if (!filtered.length) { empty.style.display = 'block'; return; }
+  empty.style.display = 'none';
+
+  filtered.forEach(p => {
+    const li = document.createElement('li');
+    li.className = 'p-item' + (p.name === activeName ? ' sel' : '');
+    li.dataset.name = p.name;
+
+    const info = document.createElement('div');
+    info.className = 'p-item-info';
+
+    const nameSpan = document.createElement('div');
+    nameSpan.className = 'p-item-name';
+    nameSpan.title = p.name;
+    nameSpan.innerHTML = hilite(esc(p.name), q);
+
+    const metaSpan = document.createElement('div');
+    metaSpan.className = 'p-item-meta';
+    metaSpan.textContent = fmtBytes(p.size) + ' · ' + fmtDate(p.updated_at * 1000);
+
+    info.appendChild(nameSpan);
+    info.appendChild(metaSpan);
+
+    const acts = document.createElement('div');
+    acts.className = 'p-item-actions';
+
+    const mkBtn = (cls, title, icon, fn) => {
+      const b = document.createElement('button');
+      b.className = 'icon-btn ' + cls;
+      b.title = title;
+      b.style.width = '26px'; b.style.height = '26px';
+      b.innerHTML = icon;
+      b.addEventListener('click', e => { e.stopPropagation(); fn(); });
+      return b;
+    };
+
+    acts.appendChild(mkBtn('green', 'Quick call with this prompt',
+      '<svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z"/></svg>',
+      () => quickCall(p.name)));
+
+    acts.appendChild(mkBtn('amber', 'Edit prompt',
+      '<svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>',
+      () => openEditorFor(p.name)));
+
+    acts.appendChild(mkBtn('red', 'Delete prompt',
+      '<svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>',
+      () => deletePrompt(p.name)));
+
+    li.appendChild(info);
+    li.appendChild(acts);
+
+    li.addEventListener('click', () => {
+      activeName = p.name;
+      renderSidebar();
+      document.getElementById('inp-prompt').value = p.name;
+      document.getElementById('preview-box').style.display = 'none';
+    });
+
+    ul.appendChild(li);
+  });
+}
+
+function hilite(text, q) {
+  if (!q) return text;
+  const re = new RegExp('(' + q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&') + ')', 'gi');
+  return text.replace(re, '<mark>$1</mark>');
+}
+
+function renderDropdown() {
+  const sel = document.getElementById('inp-prompt');
+  const prev = sel.value;
+  sel.innerHTML = '<option value="">(use server default)</option>';
+  prompts.forEach(p => {
+    const o = document.createElement('option');
+    o.value = p.name; o.textContent = p.name;
+    sel.appendChild(o);
+  });
+  if (prev && prompts.find(p => p.name === prev)) sel.value = prev;
+}
+
+// ── Editor ────────────────────────────────────────────────────────────────────
+function openEditorNew() {
+  isNew = true; activeName = null; dirty = false;
+  document.getElementById('ed-title').textContent = 'New Prompt';
+  document.getElementById('ed-badge').style.display = 'none';
+  document.getElementById('ed-name').value = '';
+  document.getElementById('ed-content').value = '';
+  document.getElementById('btn-del').style.display = 'none';
+  document.getElementById('btn-export-p').style.display = 'none';
+  document.getElementById('btn-dup').style.display = 'none';
+  document.getElementById('ed-hint').textContent = 'Not yet saved';
+  document.getElementById('ed-savedat').textContent = '';
+  document.getElementById('ed-stats').textContent = '';
+  document.getElementById('ed-lines').textContent = '';
+  document.getElementById('ed-words').textContent = '';
+  document.getElementById('ed-chars').textContent = '';
+  document.getElementById('unsaved').style.display = 'none';
+  renderSidebar();
+  switchTab('editor');
+  setTimeout(() => document.getElementById('ed-name').focus(), 50);
+}
+
+async function openEditorFor(name) {
+  try {
+    const d = await api('GET', '/api/prompts/' + encodeURIComponent(name));
+    isNew = false; activeName = name; dirty = false;
+    const p = prompts.find(x => x.name === name);
+    document.getElementById('ed-title').textContent = 'Edit Prompt';
+    const badge = document.getElementById('ed-badge');
+    badge.textContent = p ? fmtBytes(p.size) + ' · ' + fmtDate(p.updated_at * 1000) : '';
+    badge.style.display = 'inline-flex';
+    document.getElementById('ed-name').value = d.name;
+    document.getElementById('ed-content').value = d.content;
+    document.getElementById('btn-del').style.display = 'inline-flex';
+    document.getElementById('btn-export-p').style.display = 'inline-flex';
+    document.getElementById('btn-dup').style.display = 'inline-flex';
+    document.getElementById('ed-hint').textContent = 'Editing: ' + name;
+    document.getElementById('ed-savedat').textContent = '';
+    document.getElementById('unsaved').style.display = 'none';
+    updateEditorStats(d.content);
+    renderSidebar();
+    switchTab('editor');
+  } catch(e) { toast('Load failed: ' + e.message, 'err'); }
+}
+
+function editSelectedPrompt() {
+  const v = document.getElementById('inp-prompt').value;
+  if (!v) { toast('Select a prompt first', 'warn'); return; }
+  openEditorFor(v);
+}
+
+function onEditorInput() {
+  markUnsaved();
+  updateEditorStats(document.getElementById('ed-content').value);
+}
+
+function updateEditorStats(s) {
+  const chars = s.length;
+  const lines = s ? s.split('\n').length : 0;
+  const words = s.trim() ? s.trim().split(/\s+/).length : 0;
+  document.getElementById('ed-stats').textContent = chars + ' chars';
+  document.getElementById('ed-lines').textContent = lines + 'L';
+  document.getElementById('ed-words').textContent = words + 'W';
+  document.getElementById('ed-chars').textContent = chars + 'C';
+}
+
+function markUnsaved() {
+  if (!dirty) { dirty = true; document.getElementById('unsaved').style.display = 'inline-block'; }
+}
+
+function insertVar(v) {
+  const ta = document.getElementById('ed-content');
+  const s = ta.selectionStart, e = ta.selectionEnd;
+  ta.value = ta.value.slice(0, s) + v + ta.value.slice(e);
+  ta.selectionStart = ta.selectionEnd = s + v.length;
+  ta.focus(); markUnsaved();
+  updateEditorStats(ta.value);
+}
+
+async function savePrompt() {
+  const name = document.getElementById('ed-name').value.trim();
+  const content = document.getElementById('ed-content').value;
+  if (!name) { toast('Name is required', 'err'); return; }
+  if (!content.trim()) { toast('Content cannot be empty', 'err'); return; }
+
+  try {
+    if (isNew) {
+      await api('POST', '/api/prompts', { name, content });
+      toast('"' + name + '" created', 'ok');
+    } else {
+      await api('PUT', '/api/prompts/' + encodeURIComponent(activeName), { name, content });
+      toast('"' + name + '" saved', 'ok');
+    }
+    activeName = name; isNew = false; dirty = false;
+    await loadPrompts();
+    document.getElementById('ed-title').textContent = 'Edit Prompt';
+    document.getElementById('ed-hint').textContent = 'Editing: ' + name;
+    document.getElementById('ed-savedat').textContent = 'Saved ' + fmtTime(Date.now());
+    document.getElementById('btn-del').style.display = 'inline-flex';
+    document.getElementById('btn-export-p').style.display = 'inline-flex';
+    document.getElementById('btn-dup').style.display = 'inline-flex';
+    document.getElementById('unsaved').style.display = 'none';
+    renderSidebar();
+  } catch(e) { toast('Save failed: ' + e.message, 'err'); }
+}
+
+async function deletePrompt(name) {
+  if (!confirm('Delete "' + name + '"? This cannot be undone.')) return;
+  try {
+    await api('DELETE', '/api/prompts/' + encodeURIComponent(name));
+    toast('"' + name + '" deleted', 'ok');
+    if (activeName === name) openEditorNew();
+    await loadPrompts();
+  } catch(e) { toast('Delete failed: ' + e.message, 'err'); }
+}
+
+function deleteActive() { if (activeName) deletePrompt(activeName); }
+
+async function dupPrompt() {
+  if (!activeName) return;
+  const content = document.getElementById('ed-content').value;
+  const newName = activeName + '_copy';
+  try {
+    await api('POST', '/api/prompts', { name: newName, content });
+    toast('Duplicated as "' + newName + '"', 'ok');
+    await loadPrompts();
+    openEditorFor(newName);
+  } catch(e) { toast('Duplicate failed: ' + e.message, 'err'); }
+}
+
+function exportPrompt() {
+  const name = document.getElementById('ed-name').value.trim() || 'prompt';
+  const content = document.getElementById('ed-content').value;
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([content], { type: 'text/plain' }));
+  a.download = name + '.txt'; a.click(); URL.revokeObjectURL(a.href);
+  toast('Downloaded ' + name + '.txt', 'ok');
+}
+
+async function importFile(e) {
+  const f = e.target.files[0]; if (!f) return;
+  const content = await f.text();
+  openEditorNew();
+  document.getElementById('ed-name').value = f.name.replace(/\.txt$/i,'');
+  document.getElementById('ed-content').value = content;
+  updateEditorStats(content); markUnsaved();
+  switchTab('editor');
+  toast('Imported — review and save', 'info');
+  e.target.value = '';
+}
+
+// ── Preview ───────────────────────────────────────────────────────────────────
+async function togglePreview() {
+  const box = document.getElementById('preview-box');
+  if (box.style.display !== 'none') { box.style.display = 'none'; return; }
+  const name = document.getElementById('inp-prompt').value;
+  if (!name) { toast('Select a prompt to preview', 'warn'); return; }
+  try {
+    const d = await api('GET', '/api/prompts/' + encodeURIComponent(name));
+    box.textContent = d.content;
+    box.style.display = 'block';
+  } catch(e) { toast('Preview failed: ' + e.message, 'err'); }
+}
+
+function copyPreviewContent() {
+  const text = document.getElementById('prev-content').textContent;
+  navigator.clipboard.writeText(text).then(() => toast('Copied', 'ok'));
+}
+
+// ── Call ──────────────────────────────────────────────────────────────────────
+async function makeCall() {
+  const phone = document.getElementById('inp-phone').value.trim();
+  const name  = document.getElementById('inp-name').value.trim();
+  const cid   = document.getElementById('inp-cid').value.trim();
+  const cburl = document.getElementById('inp-callback').value.trim();
+  const pname = document.getElementById('inp-prompt').value;
+
+  if (!validPhone(phone)) {
+    document.getElementById('phone-err').style.display = 'block';
+    document.getElementById('inp-phone').focus();
+    return;
+  }
+  document.getElementById('phone-err').style.display = 'none';
+
+  const btn = document.getElementById('btn-call');
+  btn.disabled = true;
+  document.getElementById('call-icon').style.display = 'none';
+  document.getElementById('call-spin').style.display = 'inline';
+
+  const payload = { to: phone };
+  if (name)  payload.customer_name = name;
+  if (cid)   payload.customer_id = parseInt(cid, 10);
+  if (cburl) payload.callback_url = cburl;
+  if (pname) payload.instruction_id = pname;
+
+  let entry;
+  try {
+    const result = await api('POST', '/api/call', payload);
+    toast('Call initiated to ' + phone, 'ok');
+    entry = { phone, name, pname, ts: Date.now(), result, ok: true };
+    saveRecentPhone(phone);
+  } catch(e) {
+    toast('Call failed: ' + e.message, 'err');
+    entry = { phone, name, pname, ts: Date.now(), result: null, ok: false, error: e.message };
+  } finally {
+    btn.disabled = false;
+    document.getElementById('call-icon').style.display = 'inline';
+    document.getElementById('call-spin').style.display = 'none';
+  }
+
+  callLog.unshift(entry);
+  if (callLog.length > 100) callLog.pop();
+  try { sessionStorage.setItem('callLog', JSON.stringify(callLog)); } catch {}
+  renderLog();
+  updateStats();
+}
+
+function quickCall(pname) {
+  document.getElementById('inp-prompt').value = pname;
+  document.getElementById('preview-box').style.display = 'none';
+  switchTab('call');
+  document.getElementById('inp-phone').focus();
+  toast('"' + pname + '" selected — enter number', 'info');
+}
+
+// ── Recent phones ─────────────────────────────────────────────────────────────
+function saveRecentPhone(p) {
+  recentPhones = [p, ...recentPhones.filter(x => x !== p)].slice(0, 5);
+  try { localStorage.setItem('recentPhones', JSON.stringify(recentPhones)); } catch {}
+  renderRecent();
+}
+
+function renderRecent() {
+  const wrap = document.getElementById('recent-wrap');
+  wrap.innerHTML = '';
+  if (!recentPhones.length) return;
+  const lbl = document.createElement('span');
+  lbl.className = 'recent-label';
+  lbl.textContent = 'Recent:';
+  wrap.appendChild(lbl);
+  recentPhones.slice(0, 3).forEach(p => {
+    const b = document.createElement('button');
+    b.className = 'recent-chip';
+    b.textContent = p; b.title = 'Use ' + p;
+    b.onclick = () => {
+      document.getElementById('inp-phone').value = p;
+      document.getElementById('phone-err').style.display = 'none';
+    };
+    wrap.appendChild(b);
+  });
+}
+
+// ── Call log ──────────────────────────────────────────────────────────────────
+function renderLog() {
+  const ul = document.getElementById('log-list');
+  const empty = document.getElementById('log-empty');
+  [...ul.querySelectorAll('.log-row')].forEach(el => el.remove());
+
+  if (!callLog.length) { empty.style.display = 'flex'; return; }
+  empty.style.display = 'none';
+
+  callLog.forEach((entry, idx) => {
+    const li = document.createElement('li');
+    li.className = 'log-row';
+
+    const details = document.createElement('details');
+    const summary = document.createElement('summary');
+    summary.className = 'log-summary';
+
+    // Status dot
+    const dot = document.createElement('span');
+    dot.className = 'dot';
+    dot.style.background = entry.ok ? '#4ade80' : '#f87171';
+
+    // Phone
+    const phone = document.createElement('span');
+    phone.style.cssText = 'font-family:"JetBrains Mono",monospace;color:#e2e8f0;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px';
+    phone.textContent = entry.phone;
+
+    // Name badge
+    const nameBadge = document.createElement('span');
+    if (entry.name) {
+      nameBadge.style.cssText = 'color:#94a3b8;font-size:11.5px;max-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex-shrink:0';
+      nameBadge.textContent = entry.name;
+    }
+
+    // Prompt badge
+    const promptBadge = document.createElement('span');
+    if (entry.pname) {
+      promptBadge.className = 'badge b-amber';
+      promptBadge.style.cssText = 'max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;flex-shrink:0';
+      promptBadge.textContent = entry.pname;
+    }
+
+    // Time
+    const time = document.createElement('span');
+    time.style.cssText = 'color:#3d5068;font-size:11px;flex-shrink:0;font-family:"JetBrains Mono",monospace';
+    time.textContent = fmtTime(entry.ts);
+
+    // Action buttons
+    const actions = document.createElement('div');
+    actions.style.cssText = 'display:flex;gap:3px;flex-shrink:0';
+
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'icon-btn blue';
+    copyBtn.style.cssText = 'width:24px;height:24px;border-radius:5px';
+    copyBtn.title = 'Copy result';
+    copyBtn.innerHTML = '<svg width="11" height="11" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>';
+    const resultText = JSON.stringify(entry.result || entry.error || '', null, 2);
+    copyBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      navigator.clipboard.writeText(resultText).then(() => toast('Copied', 'ok'));
+    });
+
+    const retryBtn = document.createElement('button');
+    retryBtn.className = 'icon-btn green';
+    retryBtn.style.cssText = 'width:24px;height:24px;border-radius:5px';
+    retryBtn.title = 'Retry call';
+    retryBtn.innerHTML = '<svg width="11" height="11" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>';
+    retryBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      document.getElementById('inp-phone').value = entry.phone;
+      if (entry.name)  document.getElementById('inp-name').value = entry.name;
+      if (entry.pname) document.getElementById('inp-prompt').value = entry.pname;
+      switchTab('call');
+      toast('Prefilled from call #' + (idx + 1), 'info');
+    });
+
+    actions.appendChild(copyBtn);
+    actions.appendChild(retryBtn);
+
+    // Chevron
+    const chev = document.createElement('span');
+    chev.className = 'log-chevron';
+    chev.innerHTML = '<svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>';
+
+    summary.appendChild(dot);
+    summary.appendChild(phone);
+    if (entry.name) summary.appendChild(nameBadge);
+    if (entry.pname) summary.appendChild(promptBadge);
+    summary.appendChild(time);
+    summary.appendChild(actions);
+    summary.appendChild(chev);
+
+    // Detail
+    const detail = document.createElement('div');
+    detail.className = 'log-detail';
+    const pre = document.createElement('pre');
+    pre.textContent = resultText;
+    detail.appendChild(pre);
+
+    details.appendChild(summary);
+    details.appendChild(detail);
+    li.appendChild(details);
+    ul.appendChild(li);
+  });
+}
+
+function clearLog() {
+  if (callLog.length && !confirm('Clear all call history?')) return;
+  callLog = [];
+  try { sessionStorage.removeItem('callLog'); } catch {}
+  renderLog(); updateStats();
+}
+
+function exportLog() {
+  if (!callLog.length) { toast('No calls to export', 'warn'); return; }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(callLog, null, 2)], { type: 'application/json' }));
+  a.download = 'calls_' + new Date().toISOString().slice(0,10) + '.json';
+  a.click(); URL.revokeObjectURL(a.href);
+  toast('Exported ' + callLog.length + ' call(s)', 'ok');
+}
+
+// ── AI Generator ──────────────────────────────────────────────────────────────
+async function runGenerate() {
+  const useCase = document.getElementById('gen-use-case').value.trim();
+  if (!useCase) {
+    toast('Describe what the bot should do', 'warn');
+    document.getElementById('gen-use-case').focus();
+    return;
+  }
+
+  const btn = document.getElementById('gen-btn');
+  const prog = document.getElementById('gen-progress');
+  btn.disabled = true;
+  prog.style.display = 'flex';
+
+  const payload = {
+    use_case:             useCase,
+    company_name:         document.getElementById('gen-company').value.trim() || 'our company',
+    bot_name:             document.getElementById('gen-botname').value.trim() || 'AI Assistant',
+    language:             document.querySelector('input[name="gen-lang"]:checked').value,
+    tone:                 document.querySelector('input[name="gen-tone"]:checked').value,
+    fields_to_collect:    document.getElementById('gen-fields').value.trim(),
+    qualification_criteria: document.getElementById('gen-qual').value.trim(),
+    additional_context:   document.getElementById('gen-ctx').value.trim(),
+  };
+
+  try {
+    const result = await api('POST', '/api/generate-prompt', payload);
+    const prompt = result.prompt;
+
+    // Suggest a prompt name from use_case
+    const suggestedName = useCase.toLowerCase()
+      .replace(/[^a-z0-9\s]/g, '')
+      .trim()
+      .replace(/\s+/g, '_')
+      .slice(0, 40);
+
+    // Open editor with generated content
+    hideModal('modal-gen');
+    openEditorNew();
+    document.getElementById('ed-name').value = suggestedName;
+    document.getElementById('ed-content').value = prompt;
+    updateEditorStats(prompt);
+    markUnsaved();
+
+    toast('Prompt generated — review and save', 'ok');
+  } catch(e) {
+    toast('Generation failed: ' + e.message, 'err');
+  } finally {
+    btn.disabled = false;
+    prog.style.display = 'none';
+  }
+}
+
+// ── Leads ─────────────────────────────────────────────────────────────────────
+let _leads = [];
+
+function getWebhookUrl() {
+  return window.location.origin + '/api/leads';
+}
+
+function initWebhookUrl() {
+  document.getElementById('webhook-url').textContent = getWebhookUrl();
+}
+
+function copyWebhookUrl() {
+  navigator.clipboard.writeText(getWebhookUrl()).then(() => toast('Webhook URL copied', 'ok'));
+}
+
+function useAsCallback() {
+  document.getElementById('inp-callback').value = getWebhookUrl();
+  switchTab('call');
+  toast('Callback URL set to local leads endpoint', 'info');
+}
+
+async function loadLeads() {
+  const icon = document.getElementById('leads-refresh-icon');
+  icon.classList.add('spin');
+  try {
+    _leads = await api('GET', '/api/leads');
+    renderLeads();
+  } catch(e) {
+    toast('Could not load leads: ' + e.message, 'err');
+  } finally {
+    icon.classList.remove('spin');
+  }
+}
+
+function renderLeads() {
+  const container = document.getElementById('leads-list');
+  const empty = document.getElementById('leads-empty');
+  [...container.querySelectorAll('.lead-row')].forEach(el => el.remove());
+
+  const cnt = _leads.length;
+  document.getElementById('leads-cnt').textContent = cnt;
+  const badge = document.getElementById('leads-badge');
+  if (cnt > 0) { badge.textContent = cnt; badge.style.display = 'inline-flex'; }
+  else { badge.style.display = 'none'; }
+
+  if (!cnt) { empty.style.display = 'flex'; return; }
+  empty.style.display = 'none';
+
+  _leads.forEach((lead, idx) => {
+    const row = document.createElement('div');
+    row.className = 'lead-row';
+    row.style.cssText = 'border-bottom:1px solid #0d1117;padding:14px 18px';
+
+    const details = document.createElement('details');
+
+    const summary = document.createElement('summary');
+    summary.style.cssText = 'list-style:none;cursor:pointer;user-select:none';
+    summary.innerHTML = '<span style="display:none"></span>'; // hide marker
+
+    // Header row
+    const hdr = document.createElement('div');
+    hdr.style.cssText = 'display:flex;align-items:center;gap:10px;flex-wrap:wrap';
+
+    const dot = document.createElement('span');
+    dot.className = 'dot';
+    dot.style.background = '#4ade80';
+    dot.style.flexShrink = '0';
+
+    const phone = document.createElement('span');
+    phone.style.cssText = 'font-family:"JetBrains Mono",monospace;font-size:12.5px;color:#e2e8f0;font-weight:500';
+    phone.textContent = lead.phone_number || '—';
+
+    const cidBadge = document.createElement('span');
+    if (lead.customer_id != null) {
+      cidBadge.className = 'badge b-blue';
+      cidBadge.textContent = 'ID: ' + lead.customer_id;
+    }
+
+    const timeBadge = document.createElement('span');
+    timeBadge.style.cssText = 'color:#3d5068;font-size:11px;font-family:"JetBrains Mono",monospace;margin-left:auto';
+    timeBadge.textContent = lead.received_at ? fmtTime(lead.received_at * 1000) : '';
+
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'icon-btn blue';
+    copyBtn.style.cssText = 'width:24px;height:24px;border-radius:5px;flex-shrink:0';
+    copyBtn.title = 'Copy JSON';
+    copyBtn.innerHTML = '<svg width="11" height="11" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>';
+    const leadJson = JSON.stringify(lead, null, 2);
+    copyBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      navigator.clipboard.writeText(leadJson).then(() => toast('Copied', 'ok'));
+    });
+
+    const chev = document.createElement('span');
+    chev.className = 'log-chevron';
+    chev.innerHTML = '<svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>';
+
+    hdr.appendChild(dot);
+    hdr.appendChild(phone);
+    if (lead.customer_id != null) hdr.appendChild(cidBadge);
+    hdr.appendChild(timeBadge);
+    hdr.appendChild(copyBtn);
+    hdr.appendChild(chev);
+    summary.appendChild(hdr);
+
+    // Fields section
+    const body = document.createElement('div');
+    body.style.cssText = 'margin-top:12px;display:flex;flex-direction:column;gap:10px';
+
+    if (lead.fields && typeof lead.fields === 'object') {
+      const fieldsCard = document.createElement('div');
+      fieldsCard.style.cssText = 'background:#0d1117;border:1px solid #1e293b;border-radius:8px;padding:12px 14px';
+      const fieldsTitle = document.createElement('div');
+      fieldsTitle.style.cssText = 'font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#3d5068;margin-bottom:8px';
+      fieldsTitle.textContent = 'Extracted Fields';
+      const fieldsList = document.createElement('div');
+      fieldsList.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px';
+      Object.entries(lead.fields).forEach(([k, v]) => {
+        if (v == null || v === '' || v === 'Unknown' || v === 'UNKNOWN') return;
+        const item = document.createElement('div');
+        item.style.cssText = 'background:#161d27;border:1px solid #1e293b;border-radius:6px;padding:7px 10px';
+        item.innerHTML = `<div style="font-size:10.5px;color:#3d5068;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">${esc(k)}</div><div style="font-size:13px;color:#e2e8f0;font-weight:500">${esc(String(v))}</div>`;
+        fieldsList.appendChild(item);
+      });
+      fieldsCard.appendChild(fieldsTitle);
+      fieldsCard.appendChild(fieldsList);
+      body.appendChild(fieldsCard);
+    }
+
+    if (lead.transcript) {
+      const txCard = document.createElement('div');
+      txCard.style.cssText = 'background:#0d1117;border:1px solid #1e293b;border-radius:8px;padding:12px 14px';
+      const txTitle = document.createElement('div');
+      txTitle.style.cssText = 'font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#3d5068;margin-bottom:8px';
+      txTitle.textContent = 'Transcript';
+      const txPre = document.createElement('pre');
+      txPre.style.cssText = 'font-family:"JetBrains Mono",monospace;font-size:11px;color:#64748b;line-height:1.7;white-space:pre-wrap;word-break:break-word;max-height:200px;overflow-y:auto';
+      txPre.textContent = lead.transcript;
+      txCard.appendChild(txTitle);
+      txCard.appendChild(txPre);
+      body.appendChild(txCard);
+    }
+
+    details.appendChild(summary);
+    details.appendChild(body);
+    row.appendChild(details);
+    container.appendChild(row);
+  });
+}
+
+function clearLeads() {
+  if (_leads.length && !confirm('Clear all lead results?')) return;
+  _leads = [];
+  renderLeads();
+}
+
+function exportLeads() {
+  if (!_leads.length) { toast('No leads to export', 'warn'); return; }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(_leads, null, 2)], { type: 'application/json' }));
+  a.download = 'leads_' + new Date().toISOString().slice(0,10) + '.json';
+  a.click(); URL.revokeObjectURL(a.href);
+  toast('Exported ' + _leads.length + ' lead(s)', 'ok');
+}
+
+// Reload leads whenever the Leads tab is activated
+document.querySelectorAll('.tab-btn').forEach(b => {
+  b.addEventListener('click', () => {
+    if (b.dataset.tab === 'leads') loadLeads();
+  });
+});
+
+// ── Keyboard shortcuts ────────────────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    hideModal('modal-keys'); hideModal('modal-preview');
+    document.getElementById('preview-box').style.display = 'none';
+    return;
+  }
+  if (e.ctrlKey && e.key === 'Enter') {
+    if (document.getElementById('tab-call').classList.contains('active')) makeCall();
+    return;
+  }
+  if (e.ctrlKey && e.key === 's') {
+    if (document.getElementById('tab-editor').classList.contains('active')) {
+      e.preventDefault(); savePrompt();
+    }
+    return;
+  }
+  if (e.ctrlKey && e.key === 'n') {
+    e.preventDefault(); openEditorNew();
+  }
+});
+
+document.getElementById('inp-phone').addEventListener('input', () => {
+  document.getElementById('phone-err').style.display = 'none';
+});
+
+document.getElementById('inp-prompt').addEventListener('change', () => {
+  document.getElementById('preview-box').style.display = 'none';
+});
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+(async () => {
+  initWebhookUrl();
+  await checkHealth();
+  await loadPrompts();
+  renderLog();
+  renderRecent();
+  updateStats();
+  setInterval(checkHealth, 30000);
+})();
+</script>
+</body>
+</html>

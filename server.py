@@ -11,6 +11,7 @@
 import asyncio
 import json
 import os
+import re
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -19,6 +20,8 @@ import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import JSONResponse, PlainTextResponse
+from google.genai import Client
+from google.genai.types import GenerateContentConfig, HttpOptions
 from loguru import logger
 from pydantic import BaseModel
 from starlette.websockets import WebSocketState
@@ -281,6 +284,137 @@ async def websocket_endpoint(
             except Exception:
                 pass
         logger.info(f"WebSocket closed | stream_id={proxy.stream_id}")
+
+
+# ── AI Prompt Generator ────────────────────────────────────────────────────────
+
+_gen_client: Optional[Client] = None
+
+
+def _get_gen_client() -> Client:
+    global _gen_client
+    if _gen_client is None:
+        _gen_client = Client(
+            api_key=os.getenv("GOOGLE_API_KEY"),
+            http_options=HttpOptions(api_version="v1beta"),
+        )
+    return _gen_client
+
+
+class GeneratePromptRequest(BaseModel):
+    use_case: str
+    company_name: str = "our company"
+    bot_name: str = "AI Assistant"
+    language: str = "auto"          # auto | english | hindi | hinglish
+    tone: str = "friendly"          # friendly | professional | casual | assertive
+    fields_to_collect: str = ""
+    qualification_criteria: str = ""
+    additional_context: str = ""
+
+
+def _build_meta_prompt(req: GeneratePromptRequest) -> str:
+    lang_rule = {
+        "auto":      "Detect and mirror the caller's language. Support Hindi, English, and Hinglish (Hindi-English mix) seamlessly.",
+        "english":   "Respond in English throughout.",
+        "hindi":     "Respond in Hindi throughout, using Devanagari-friendly phrasing.",
+        "hinglish":  "Respond in Hinglish — a natural, conversational mix of Hindi and English as spoken in urban India.",
+    }.get(req.language.lower(), "Detect and mirror the caller's language.")
+
+    tone_guide = {
+        "friendly":     "Warm, approachable, encouraging — like a helpful friend, not a salesperson.",
+        "professional": "Polished, respectful, confident — like a senior business executive.",
+        "casual":       "Relaxed, informal, conversational — use contractions and everyday language.",
+        "assertive":    "Clear, direct, persuasive — guide the conversation purposefully without being pushy.",
+    }.get(req.tone.lower(), "Warm and approachable.")
+
+    fields = req.fields_to_collect.strip() or "Relevant details based on the use case"
+    qualification = req.qualification_criteria.strip() or "Determine based on the user's intent and responses"
+    extra = f"\nADDITIONAL CONSTRAINTS:\n{req.additional_context.strip()}" if req.additional_context.strip() else ""
+
+    return f"""You are a world-class conversation designer specialising in AI voice bots for phone calls. \
+Your output will be used verbatim as a system prompt for a real production phone bot — it must be complete, \
+precise, and immediately usable without any editing.
+
+PLATFORM FACTS (your generated prompt must account for all of these):
+- Telephony: Plivo outbound call, 8 kHz u-law audio — quality is often noisy or muffled.
+- AI engine: Google Gemini Live (real-time, streaming voice — NOT text chat).
+- One runtime template variable is available: {{customer_name}}
+  This is substituted with the real caller's name before every call. Use it naturally.
+- The bot speaks first (greeter role). It must never wait silently.
+- Response latency target: < 1.5 s — keep outputs SHORT.
+- VAD (voice activity detection) cuts the bot off the moment the user speaks — so long monologues get interrupted.
+
+BOT SPECIFICATION:
+Company   : {req.company_name}
+Bot name  : {req.bot_name}
+Purpose   : {req.use_case}
+Language  : {lang_rule}
+Tone      : {tone_guide}
+Collect   : {fields}
+Qualify by: {qualification}{extra}
+
+REQUIRED SECTIONS — include every one, in this order:
+
+1. ROLE (2-3 sentences) — who the bot is, which company, the single goal.
+2. AUDIO NOTE (1 sentence) — if caller is unclear, ask to repeat once. Never guess.
+3. CONVERSATION STYLE (bullet list) — CRITICAL: every response <= 20 words, one sentence, never longer; ask exactly one question per turn; never list options unless asked; never admit to being AI unless asked directly; apply language and tone rules.
+4. KNOWN INFORMATION — list what is already known so bot never asks again. Always include: "- Caller's name: {{customer_name}}"
+5. INFORMATION TO COLLECT — numbered steps, one specific data point per step, ordered by priority.
+6. INTENT CLASSIFICATION — define four intents with one-line trigger each: INTERESTED / EXPLORING / NOT_INTERESTED / CALLBACK
+7. CONVERSATION FLOW — subsections: START / IF INTERESTED / IF EXPLORING / IF NOT INTERESTED / IF CALLBACK / IF CALLER ASKS A QUESTION. Each has 1-3 example lines the bot says, <= 20 words each. START must use {{customer_name}}.
+8. QUALIFICATION — define what a HIGH QUALITY outcome looks like. Include exact script line when caller qualifies.
+9. NEXT STEPS — what bot says and confirms when caller agrees to proceed.
+10. RULES (bullet list, >= 5 rules) — hard constraints the bot must never break.
+
+OUTPUT FORMAT:
+- Plain text only. No markdown, no code fences.
+- Section headers in UPPER CASE.
+- Example scripts in quotation marks.
+- NO preamble. Start directly with the ROLE section.
+- NO closing note or explanation after last section.
+- Total length: 400-700 words.
+"""
+
+
+@app.post("/generate-prompt")
+async def generate_prompt(req: GeneratePromptRequest):
+    """Use Gemini to generate a production-ready phone bot system prompt.
+
+    Example::
+        curl -X POST http://localhost:8000/generate-prompt \\
+             -H 'Content-Type: application/json' \\
+             -d '{
+               "use_case": "Solar panel lead qualification",
+               "company_name": "Swift Solar",
+               "bot_name": "Swift",
+               "language": "hinglish",
+               "tone": "friendly",
+               "fields_to_collect": "location, property type, electricity bill, roof type, ownership"
+             }'
+    """
+    if not req.use_case.strip():
+        raise HTTPException(status_code=400, detail="use_case is required")
+
+    meta = _build_meta_prompt(req)
+    logger.info(f"Generating prompt | use_case={req.use_case!r} lang={req.language} tone={req.tone}")
+
+    try:
+        client = _get_gen_client()
+        response = await asyncio.to_thread(
+            client.models.generate_content,
+            model="gemini-2.0-flash",
+            contents=meta,
+            config=GenerateContentConfig(
+                temperature=0.75,
+                max_output_tokens=2048,
+            ),
+        )
+        text = response.text.strip()
+        logger.info(f"Prompt generated | {len(text)} chars")
+        return {"prompt": text}
+    except Exception as e:
+        logger.error(f"Prompt generation failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Gemini error: {e}")
 
 
 # ── Entry point ────────────────────────────────────────────────────────────────
