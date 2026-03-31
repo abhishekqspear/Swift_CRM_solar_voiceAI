@@ -145,6 +145,8 @@ class CallRequest(BaseModel):
     from_: Optional[str] = None          # Override PLIVO_FROM_NUMBER from .env
     system_prompt: Optional[str] = None  # Per-call prompt override
     customer_name: Optional[str] = None  # Customer name injected into system prompt
+    customer_id: Optional[int] = None    # Customer ID passed back in the webhook callback
+    callback_url: Optional[str] = None   # URL to POST extracted lead data when call ends
 
 @app.post("/call")
 async def make_outbound_call(req: CallRequest):
@@ -156,7 +158,7 @@ async def make_outbound_call(req: CallRequest):
     Example::
         curl -X POST http://localhost:8000/call \\
              -H 'Content-Type: application/json' \\
-             -d '{"to": "+919876543210", "customer_name": "Rahul"}'
+             -d '{"to": "+919876543210", "customer_id": 42, "customer_name": "Rahul", "callback_url": "https://your-service.com/lead"}'
     """
     auth_id = os.getenv("PLIVO_AUTH_ID")
     auth_token = os.getenv("PLIVO_AUTH_TOKEN")
@@ -170,10 +172,14 @@ async def make_outbound_call(req: CallRequest):
     if not ngrok_host:
         raise HTTPException(status_code=500, detail="NGROK_HOST not set in .env")
 
-    answer_url = f"https://{ngrok_host}/answer"
-    if req.customer_name:
-        from urllib.parse import quote
-        answer_url += f"?customer_name={quote(req.customer_name)}"
+    from urllib.parse import quote
+    params = []
+    if req.customer_name: params.append(f"customer_name={quote(req.customer_name, safe='')}")
+    if req.customer_id is not None: params.append(f"customer_id={req.customer_id}")
+    if req.callback_url:  params.append(f"callback_url={quote(req.callback_url, safe='')}")
+    # to_number is passed so the bot can include it in the callback payload
+    params.append(f"to_number={quote(req.to, safe='')}")
+    answer_url = f"https://{ngrok_host}/answer" + ("?" + "&".join(params) if params else "")
     # Plivo accepts E.164 with or without leading '+'; strip it to avoid format mismatches
     from_clean = from_number.lstrip("+")
     to_clean = req.to.lstrip("+")
@@ -207,12 +213,18 @@ async def answer_call(request: Request):
     # NGROK_HOST takes priority; falls back to the request Host header
     host = os.getenv("NGROK_HOST") or request.headers.get("host", "yourdomain.com")
     ws_scheme = "wss" if os.getenv("USE_WSS", "true").lower() == "true" else "ws"
-    ws_url = f"{ws_scheme}://{host}/ws"
-    customer_name = request.query_params.get("customer_name")
-    if customer_name:
-        from urllib.parse import quote
-        ws_url += f"?customer_name={quote(customer_name)}"
 
+    from urllib.parse import quote
+    qp = request.query_params
+    params = []
+    if qp.get("customer_name"): params.append(f"customer_name={quote(qp['customer_name'], safe='')}")
+    if qp.get("customer_id"):   params.append(f"customer_id={qp['customer_id']}")
+    if qp.get("callback_url"):  params.append(f"callback_url={quote(qp['callback_url'], safe='')}")
+    if qp.get("to_number"):     params.append(f"to_number={quote(qp['to_number'], safe='')}")
+    ws_url = f"{ws_scheme}://{host}/ws" + ("?" + "&".join(params) if params else "")
+
+    # & in query strings is invalid XML — must be escaped as &amp; inside XML elements
+    ws_url_xml = ws_url.replace("&", "&amp;")
     xml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Stream streamTimeout="86400"
@@ -220,7 +232,7 @@ async def answer_call(request: Request):
             bidirectional="true"
             contentType="audio/x-mulaw;rate=8000"
             maxDuration="3600">
-        {ws_url}
+        {ws_url_xml}
     </Stream>
 </Response>"""
 
@@ -229,7 +241,13 @@ async def answer_call(request: Request):
 
 
 @app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket, customer_name: Optional[str] = None):
+async def websocket_endpoint(
+    websocket: WebSocket,
+    customer_name: Optional[str] = None,
+    customer_id: Optional[int] = None,
+    callback_url: Optional[str] = None,
+    to_number: Optional[str] = None,
+):
     """WebSocket endpoint — one pipeline per connected call."""
     await websocket.accept()
     logger.info("WebSocket connection accepted")
@@ -249,6 +267,9 @@ async def websocket_endpoint(websocket: WebSocket, customer_name: Optional[str] 
             call_id=proxy.call_id,
             system_prompt=os.getenv("SYSTEM_PROMPT"),
             customer_name=customer_name,
+            customer_id=customer_id,
+            callback_url=callback_url,
+            to_number=to_number,
         )
     except Exception as e:
         logger.error(f"Bot error for stream_id={proxy.stream_id}: {e}", exc_info=True)

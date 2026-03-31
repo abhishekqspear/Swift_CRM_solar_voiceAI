@@ -3,9 +3,11 @@
 # Voice-to-voice with per-call context isolation and speech interruption
 #
 
+import json
 import os
 from typing import Optional
 
+import aiohttp
 import numpy as np
 from dotenv import load_dotenv
 from google.genai import Client
@@ -32,7 +34,6 @@ from pipecat.processors.audio.vad_processor import VADProcessor
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.serializers.plivo import PlivoFrameSerializer
 from pipecat.services.google.gemini_live.llm import GeminiLiveLLMService, GeminiVADParams
-from pipecat.transcriptions.language import Language
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams, FastAPIWebsocketTransport
 
 load_dotenv(override=True)
@@ -114,9 +115,31 @@ class _PhoneBotGeminiService(GeminiLiveLLMService):
         self._pre_buffer: list = []          # [(audio_bytes, sample_rate), …]
         self._pre_buffer_bytes = 0
         self._pre_buffer_max_bytes = 0       # computed on first audio frame
+        self._transcript: list[dict] = []    # [{"role": "user"|"bot", "text": "..."}, …]
+        self._bot_turn_buffer: str = ""      # accumulates output transcription within a turn
 
     def create_client(self):
         self._client = get_shared_client()
+
+    async def _push_user_transcription(self, text, result=None):
+        """Capture complete user sentences into the transcript."""
+        await super()._push_user_transcription(text, result=result)
+        if text:
+            self._transcript.append({"role": "user", "text": text})
+
+    async def _handle_msg_output_transcription(self, message):
+        """Accumulate bot output text within the current turn."""
+        await super()._handle_msg_output_transcription(message)
+        text = message.server_content.output_transcription.text if message.server_content.output_transcription else ""
+        if text:
+            self._bot_turn_buffer += text
+
+    async def _handle_msg_turn_complete(self, message):
+        """Flush accumulated bot turn text to transcript on turn end."""
+        await super()._handle_msg_turn_complete(message)
+        if self._bot_turn_buffer:
+            self._transcript.append({"role": "bot", "text": self._bot_turn_buffer.strip()})
+            self._bot_turn_buffer = ""
 
     async def _handle_session_ready(self, session):
         """Trigger greeting once Gemini session is live.
@@ -330,6 +353,68 @@ class EarlyInterruptor(FrameProcessor):
         await self.push_frame(frame, direction)
 
 
+# ── Lead extraction helpers ────────────────────────────────────────────────────
+
+async def extract_lead_fields(transcript: list[dict]) -> dict:
+    """Send transcript to Gemini REST and extract structured lead fields as JSON."""
+    text = "\n".join(f"{t['role'].upper()}: {t['text']}" for t in transcript)
+    prompt = (
+        "Extract the following fields from this solar sales call transcript. "
+        "Return ONLY valid JSON (no markdown, no explanation) with exactly these keys: "
+        "full_name, location, property_type (Residential/Commercial/Industrial/Unknown), "
+        "monthly_bill (exact words used by caller, e.g. '8000 rupees'), "
+        "roof_type (Concrete/Metal/Other/Not sure/Unknown), "
+        "ownership (Own/Rented/Unknown), "
+        "intent (INTERESTED/EXPLORING/NOT_INTERESTED/CALLBACK/UNKNOWN), "
+        "qualification (HIGH/LOW/UNKNOWN).\n\nTranscript:\n" + text
+    )
+    try:
+        client = get_shared_client()
+        response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
+        raw = response.text.strip()
+        # Strip markdown code fence if Gemini wraps the JSON
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        return json.loads(raw.strip())
+    except Exception as e:
+        logger.error(f"Lead extraction failed: {e}")
+        return {k: "UNKNOWN" for k in [
+            "full_name", "location", "property_type", "monthly_bill",
+            "roof_type", "ownership", "intent", "qualification"
+        ]}
+
+
+async def send_callback(
+    callback_url: str,
+    customer_id: Optional[int],
+    call_id: Optional[str],
+    phone_number: Optional[str],
+    fields: dict,
+    transcript: list[dict],
+):
+    """POST extracted lead data to the calling service's callback URL."""
+    transcript_text = "\n".join(f"{t['role'].upper()}: {t['text']}" for t in transcript)
+    payload = {
+        "customer_id": customer_id,
+        "call_id": call_id,
+        "phone_number": phone_number,
+        "fields": fields,
+        "transcript": transcript_text,
+    }
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                callback_url,
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as resp:
+                logger.info(f"Lead callback → {callback_url} HTTP {resp.status} | customer_id={customer_id}")
+    except Exception as e:
+        logger.error(f"Lead callback failed (url={callback_url}): {e}")
+
+
 # ── Bot entry point ────────────────────────────────────────────────────────────
 
 async def run_bot(
@@ -338,6 +423,9 @@ async def run_bot(
     call_id: Optional[str] = None,
     system_prompt: Optional[str] = None,
     customer_name: Optional[str] = None,
+    customer_id: Optional[int] = None,
+    callback_url: Optional[str] = None,
+    to_number: Optional[str] = None,
 ):
     """Run the Gemini Live bot for a single Plivo call."""
 
@@ -407,7 +495,6 @@ async def run_bot(
         system_instruction=effective_prompt,  # must be direct param — Settings path skips _system_instruction_from_init
         settings=GeminiLiveLLMService.Settings(
             voice="Puck",  # Aoede | Charon | Fenrir | Kore | Puck
-            language=Language.EN_AU,
             vad=GeminiVADParams(
                 disabled=True,  # Silero owns all VAD
             ),
@@ -445,6 +532,13 @@ async def run_bot(
     async def on_client_disconnected(transport, client):
         logger.info(f"Client disconnected | stream_id={stream_id}")
         await task.cancel()
+        if callback_url:
+            logger.info(f"Extracting lead fields from {len(llm._transcript)} transcript turns")
+            fields = await extract_lead_fields(llm._transcript)
+            # customer_name is pre-known — use it if extraction didn't find a name
+            if customer_name and fields.get("full_name") in (None, "Unknown", "UNKNOWN", ""):
+                fields["full_name"] = customer_name
+            await send_callback(callback_url, customer_id, call_id, to_number, fields, llm._transcript)
 
     @transport.event_handler("on_session_timeout")
     async def on_session_timeout(transport, client):
