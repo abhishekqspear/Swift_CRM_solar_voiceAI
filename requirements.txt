@@ -1,0 +1,21 @@
+# Core Pipecat (install from local checkout)
+# pip install -e ./pipecat[google,websocket,silero]
+
+# Or install released package:
+# pipecat-ai[google,websocket,silero]
+
+# Server
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+python-dotenv>=1.0.0
+
+# Google Gemini Live
+google-genai>=1.57.0,<2
+
+# Audio / VAD
+silero-vad>=5.1,<6          # pulled in automatically by pipecat[silero]
+torch>=2.1.0                # required by silero
+torchaudio>=2.1.0
+
+# HTTP (used by Plivo hang-up)
+aiohttp>=3.9.0

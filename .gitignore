@@ -1,0 +1,16 @@
+# Virtual environments
+venv/
+pipecat/venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Env files (secrets)
+.env
+
+# OS files
+.DS_Store
+
+# Logs
+*.log
