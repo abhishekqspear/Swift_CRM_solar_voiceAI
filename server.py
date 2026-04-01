@@ -194,7 +194,13 @@ async def make_outbound_call(req: CallRequest):
     params.append(f"call_sid={call_sid}")
     # to_number is passed so the bot can include it in the callback payload
     params.append(f"to_number={quote(req.to, safe='')}")
-    answer_url = f"https://{ngrok_host}/answer" + ("?" + "&".join(params) if params else "")
+    use_wss = os.getenv("USE_WSS", "true").lower() == "true"
+    answer_scheme = "https" if use_wss else "http"
+    # PUBLIC_PORT: set when running on a raw IP (e.g. EC2 elastic IP) without a reverse proxy.
+    # Leave unset when behind ngrok or a load balancer (standard 443/80 ports).
+    public_port = os.getenv("PUBLIC_PORT", "")
+    host_with_port = f"{ngrok_host}:{public_port}" if public_port else ngrok_host
+    answer_url = f"{answer_scheme}://{host_with_port}/answer" + ("?" + "&".join(params) if params else "")
     # Plivo accepts E.164 with or without leading '+'; strip it to avoid format mismatches
     from_clean = from_number.lstrip("+")
     to_clean = req.to.lstrip("+")
