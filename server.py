@@ -12,6 +12,7 @@ import asyncio
 import json
 import os
 import re
+import uuid
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -50,6 +51,10 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Plivo Gemini Live Phone Bot", lifespan=lifespan)
+
+# Per-call system_prompt store — keyed by short call_sid passed in URL
+# Entries are cleaned up after the WebSocket session ends
+_call_prompts: dict[str, str] = {}
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -176,10 +181,17 @@ async def make_outbound_call(req: CallRequest):
         raise HTTPException(status_code=500, detail="NGROK_HOST not set in .env")
 
     from urllib.parse import quote
+    # Store system_prompt server-side to avoid URL length limits
+    call_sid = uuid.uuid4().hex[:16]
+    effective_prompt = req.system_prompt or os.getenv("SYSTEM_PROMPT")
+    if effective_prompt:
+        _call_prompts[call_sid] = effective_prompt
+
     params = []
     if req.customer_name: params.append(f"customer_name={quote(req.customer_name, safe='')}")
     if req.customer_id is not None: params.append(f"customer_id={req.customer_id}")
     if req.callback_url:  params.append(f"callback_url={quote(req.callback_url, safe='')}")
+    params.append(f"call_sid={call_sid}")
     # to_number is passed so the bot can include it in the callback payload
     params.append(f"to_number={quote(req.to, safe='')}")
     answer_url = f"https://{ngrok_host}/answer" + ("?" + "&".join(params) if params else "")
@@ -223,6 +235,7 @@ async def answer_call(request: Request):
     if qp.get("customer_name"): params.append(f"customer_name={quote(qp['customer_name'], safe='')}")
     if qp.get("customer_id"):   params.append(f"customer_id={qp['customer_id']}")
     if qp.get("callback_url"):  params.append(f"callback_url={quote(qp['callback_url'], safe='')}")
+    if qp.get("call_sid"):      params.append(f"call_sid={qp['call_sid']}")
     if qp.get("to_number"):     params.append(f"to_number={quote(qp['to_number'], safe='')}")
     ws_url = f"{ws_scheme}://{host}/ws" + ("?" + "&".join(params) if params else "")
 
@@ -249,11 +262,16 @@ async def websocket_endpoint(
     customer_name: Optional[str] = None,
     customer_id: Optional[int] = None,
     callback_url: Optional[str] = None,
+    call_sid: Optional[str] = None,
     to_number: Optional[str] = None,
 ):
     """WebSocket endpoint — one pipeline per connected call."""
     await websocket.accept()
     logger.info("WebSocket connection accepted")
+
+    # Retrieve and consume the per-call prompt (falls back to env var)
+    system_prompt = _call_prompts.pop(call_sid, None) if call_sid else None
+    system_prompt = system_prompt or os.getenv("SYSTEM_PROMPT")
 
     # Step 1: Extract Plivo metadata from start event
     proxy = _PlivoWebSocketProxy(websocket)
@@ -268,7 +286,7 @@ async def websocket_endpoint(
             websocket=proxy,
             stream_id=proxy.stream_id,
             call_id=proxy.call_id,
-            system_prompt=os.getenv("SYSTEM_PROMPT"),
+            system_prompt=system_prompt,
             customer_name=customer_name,
             customer_id=customer_id,
             callback_url=callback_url,

@@ -1,0 +1,105 @@
+name: pipecat-gemini
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Services
+# ─────────────────────────────────────────────────────────────────────────────
+#
+#  bot   → server.py   → port 8000  (Plivo webhook + Gemini Live WebSocket)
+#  ui    → ui_server.py → port 8081 (Dashboard, prompt CRUD, call proxy)
+#
+# Both share the same Docker image; CMD is overridden per service.
+# Prompt files (.txt) are persisted in the `prompts` named volume so they
+# survive container restarts and are visible to both services.
+#
+# Quick start:
+#   1. cp .env.example .env  →  fill in all values
+#   2. docker compose build
+#   3. docker compose up -d
+#   4. Run ngrok: ngrok http 8000  (or use the ngrok profile below)
+#   5. Update NGROK_HOST in .env with the hostname ngrok printed
+#   6. docker compose restart bot
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── Bot server ─────────────────────────────────────────────────────────────
+  bot:
+    build: .
+    image: pipecat-gemini:latest
+    container_name: pipecat-bot
+    command: python server.py
+    ports:
+      - "8000:8000"
+    env_file: .env
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "8000"
+    volumes:
+      - prompts:/app/prompts
+    restart: unless-stopped
+    healthcheck:
+      # /docs is always available in FastAPI — lightweight check
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/docs"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # Torch + Silero VAD model load + Gemini pre-warm takes ~60-90 s
+      start_period: 120s
+
+  # ── UI server ──────────────────────────────────────────────────────────────
+  ui:
+    build: .
+    image: pipecat-gemini:latest
+    container_name: pipecat-ui
+    command: python ui_server.py
+    ports:
+      - "8081:8081"
+    env_file: .env
+    environment:
+      UI_HOST: "0.0.0.0"
+      UI_PORT: "8081"
+      # Reach the bot container by its service name, not localhost
+      BOT_SERVER_URL: "http://bot:8000"
+    volumes:
+      - prompts:/app/prompts
+    depends_on:
+      - bot
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8081/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # ── ngrok (optional — enable with: docker compose --profile tunnel up) ─────
+  #
+  # Usage:
+  #   NGROK_AUTHTOKEN=<your_token> docker compose --profile tunnel up -d
+  #
+  # After startup, get the public hostname:
+  #   curl -s http://localhost:4040/api/tunnels | python3 -m json.tool | grep public_url
+  # Then update NGROK_HOST in .env and restart the bot:
+  #   docker compose restart bot
+  ngrok:
+    image: ngrok/ngrok:latest
+    container_name: pipecat-ngrok
+    profiles: ["tunnel"]
+    command: http bot:8000 --log stdout
+    ports:
+      - "4040:4040"
+    environment:
+      NGROK_AUTHTOKEN: "${NGROK_AUTHTOKEN}"
+    depends_on:
+      - bot
+    restart: unless-stopped
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Volumes
+# ─────────────────────────────────────────────────────────────────────────────
+volumes:
+  prompts:
+    driver: local
+    # To pre-seed prompt files from your local prompts/ directory on first run:
+    #   docker compose run --rm bot cp -r /app/prompts_seed/. /app/prompts/
+    # Or just create prompts via the UI dashboard at http://localhost:8081

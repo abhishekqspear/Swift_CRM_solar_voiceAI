@@ -19,3 +19,9 @@ torchaudio>=2.1.0
 
 # HTTP (used by Plivo hang-up)
 aiohttp>=3.9.0
+
+# Logging
+loguru>=0.7.0
+
+# Numeric (used by bot audio processing)
+numpy>=1.26.0

@@ -471,9 +471,9 @@ async def run_bot(
     # ── Silero VAD — detects speech/silence on phone audio (reliable at 8→16kHz)
     vad = VADProcessor(
         vad_analyzer=SileroVADAnalyzer(params=VADParams(
-            confidence=0.2,   # phone 8kHz→16kHz upsampled audio peaks at 0.2-0.6; 0.3 misses soft speech
-            stop_secs=0.5,    # 500ms silence → end of turn; saves 300ms latency vs 0.8s
-            start_secs=0.2,   # 200ms (~6 frames) sustained above threshold; noise stays 0.10-0.15 so false triggers unlikely
+            confidence=float(os.getenv("VAD_CONFIDENCE", "0.5")),  # raise to 0.5–0.7 to reduce noise triggers
+            stop_secs=float(os.getenv("VAD_STOP_SECS", "0.5")),   # 500ms silence → end of turn
+            start_secs=float(os.getenv("VAD_START_SECS", "0.3")), # 300ms sustained speech required to trigger
             min_volume=0.0,   # disable EBU R128 volume gate — phone audio at 8kHz
                               # measures very low on that scale; rely on Silero only
         ))
