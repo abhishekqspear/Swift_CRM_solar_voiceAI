@@ -1,5 +1,5 @@
 #
-# UI Server — Bot Management Dashboard (port 8081)
+# UI Server — Bot Management Dashboard (port 8091)
 #
 # Serves a single-page management UI and provides:
 #   - CRUD API for system prompt files (stored in prompts/)
@@ -7,7 +7,7 @@
 #
 # Run:
 #   python ui_server.py
-#   → http://localhost:8081
+#   → http://localhost:8091
 #
 
 import asyncio
@@ -35,7 +35,7 @@ load_dotenv(override=True)
 PROMPTS_DIR = Path(__file__).parent / "prompts"
 PROMPTS_DIR.mkdir(exist_ok=True)
 
-BOT_SERVER = os.getenv("BOT_SERVER_URL", "http://localhost:8000")
+BOT_SERVER = os.getenv("BOT_SERVER_URL", "http://localhost:8090")
 
 app = FastAPI(title="Swift Solar Bot Dashboard")
 
@@ -216,7 +216,7 @@ async def make_call(req: CallRequest):
 async def receive_lead(request: Request):
     """Receive lead data POSTed by the bot after a call ends.
 
-    Set callback_url to http://<this-host>:8081/api/leads when making a call
+    Set callback_url to http://<this-host>:8091/api/leads when making a call
     and the result will appear in the Leads tab of the dashboard.
     """
     try:
@@ -377,6 +377,6 @@ async def generate_prompt(req: GeneratePromptRequest):
 
 if __name__ == "__main__":
     host = os.getenv("UI_HOST", "0.0.0.0")
-    port = int(os.getenv("UI_PORT", "8081"))
+    port = int(os.getenv("UI_PORT", "8091"))
     logger.info(f"Starting UI server on {host}:{port}")
     uvicorn.run(app, host=host, port=port)

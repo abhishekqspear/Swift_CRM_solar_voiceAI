@@ -164,21 +164,21 @@ async def make_outbound_call(req: CallRequest):
     starts the Gemini Live audio stream — same flow as an inbound call.
 
     Example::
-        curl -X POST http://localhost:8000/call \\
+        curl -X POST http://localhost:8090/call \\
              -H 'Content-Type: application/json' \\
              -d '{"to": "+919876543210", "customer_id": 42, "customer_name": "Rahul", "callback_url": "https://your-service.com/lead"}'
     """
     auth_id = os.getenv("PLIVO_AUTH_ID")
     auth_token = os.getenv("PLIVO_AUTH_TOKEN")
     from_number = req.from_ or os.getenv("PLIVO_FROM_NUMBER")
-    ngrok_host = os.getenv("NGROK_HOST")
+    ngrok_host = os.getenv("PUBLIC_HOST") or os.getenv("NGROK_HOST")
 
     if not auth_id or not auth_token:
         raise HTTPException(status_code=500, detail="PLIVO_AUTH_ID / PLIVO_AUTH_TOKEN not set")
     if not from_number:
         raise HTTPException(status_code=500, detail="PLIVO_FROM_NUMBER not set in .env")
     if not ngrok_host:
-        raise HTTPException(status_code=500, detail="NGROK_HOST not set in .env")
+        raise HTTPException(status_code=500, detail="PUBLIC_HOST (or NGROK_HOST) not set in .env")
 
     from urllib.parse import quote
     # Store system_prompt server-side to avoid URL length limits
@@ -225,8 +225,8 @@ async def make_outbound_call(req: CallRequest):
 @app.post("/answer")
 async def answer_call(request: Request):
     """Plivo webhook — answers the call and streams audio to this server."""
-    # NGROK_HOST takes priority; falls back to the request Host header
-    host = os.getenv("NGROK_HOST") or request.headers.get("host", "yourdomain.com")
+    # PUBLIC_HOST (or legacy NGROK_HOST) takes priority; falls back to the request Host header
+    host = os.getenv("PUBLIC_HOST") or os.getenv("NGROK_HOST") or request.headers.get("host", "yourdomain.com")
     ws_scheme = "wss" if os.getenv("USE_WSS", "true").lower() == "true" else "ws"
 
     from urllib.parse import quote
@@ -399,7 +399,7 @@ async def generate_prompt(req: GeneratePromptRequest):
     """Use Gemini to generate a production-ready phone bot system prompt.
 
     Example::
-        curl -X POST http://localhost:8000/generate-prompt \\
+        curl -X POST http://localhost:8090/generate-prompt \\
              -H 'Content-Type: application/json' \\
              -d '{
                "use_case": "Solar panel lead qualification",
@@ -439,6 +439,6 @@ async def generate_prompt(req: GeneratePromptRequest):
 
 if __name__ == "__main__":
     host = os.getenv("HOST", "0.0.0.0")
-    port = int(os.getenv("PORT", "8000"))
+    port = int(os.getenv("PORT", "8090"))
     logger.info(f"Starting server on {host}:{port}")
     uvicorn.run(app, host=host, port=port)
