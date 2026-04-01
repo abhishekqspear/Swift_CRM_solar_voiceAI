@@ -234,6 +234,8 @@ async def answer_call(request: Request):
     # PUBLIC_HOST (or legacy NGROK_HOST) takes priority; falls back to the request Host header
     host = os.getenv("PUBLIC_HOST") or os.getenv("NGROK_HOST") or request.headers.get("host", "yourdomain.com")
     ws_scheme = "wss" if os.getenv("USE_WSS", "true").lower() == "true" else "ws"
+    public_port = os.getenv("PUBLIC_PORT", "")
+    host = f"{host}:{public_port}" if public_port else host
 
     from urllib.parse import quote
     qp = request.query_params
