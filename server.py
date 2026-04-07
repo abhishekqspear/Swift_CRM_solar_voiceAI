@@ -55,6 +55,7 @@ app = FastAPI(title="Plivo Gemini Live Phone Bot", lifespan=lifespan)
 # Per-call system_prompt store — keyed by short call_sid passed in URL
 # Entries are cleaned up after the WebSocket session ends
 _call_prompts: dict[str, str] = {}
+_call_voices: dict[str, str] = {}
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -155,6 +156,7 @@ class CallRequest(BaseModel):
     customer_name: Optional[str] = None  # Customer name injected into system prompt
     customer_id: Optional[int] = None    # Customer ID passed back in the webhook callback
     callback_url: Optional[str] = None   # URL to POST extracted lead data when call ends
+    voice: Optional[str] = None          # Gemini voice: Puck | Aoede | Charon | Fenrir | Kore | Leda | Orus | Zephyr
 
 @app.post("/call")
 async def make_outbound_call(req: CallRequest):
@@ -181,11 +183,13 @@ async def make_outbound_call(req: CallRequest):
         raise HTTPException(status_code=500, detail="PUBLIC_HOST (or NGROK_HOST) not set in .env")
 
     from urllib.parse import quote
-    # Store system_prompt server-side to avoid URL length limits
+    # Store system_prompt and voice server-side to avoid URL length limits
     call_sid = uuid.uuid4().hex[:16]
     effective_prompt = req.system_prompt or os.getenv("SYSTEM_PROMPT")
     if effective_prompt:
         _call_prompts[call_sid] = effective_prompt
+    if req.voice:
+        _call_voices[call_sid] = req.voice
 
     params = []
     if req.customer_name: params.append(f"customer_name={quote(req.customer_name, safe='')}")
@@ -277,9 +281,10 @@ async def websocket_endpoint(
     await websocket.accept()
     logger.info("WebSocket connection accepted")
 
-    # Retrieve and consume the per-call prompt (falls back to env var)
+    # Retrieve and consume per-call overrides
     system_prompt = _call_prompts.pop(call_sid, None) if call_sid else None
     system_prompt = system_prompt or os.getenv("SYSTEM_PROMPT")
+    voice = _call_voices.pop(call_sid, None) if call_sid else None
 
     # Step 1: Extract Plivo metadata from start event
     proxy = _PlivoWebSocketProxy(websocket)
@@ -299,6 +304,7 @@ async def websocket_endpoint(
             customer_id=customer_id,
             callback_url=callback_url,
             to_number=to_number,
+            voice=voice,
         )
     except Exception as e:
         logger.error(f"Bot error for stream_id={proxy.stream_id}: {e}", exc_info=True)

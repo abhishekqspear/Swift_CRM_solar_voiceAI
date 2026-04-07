@@ -427,6 +427,8 @@ async def send_callback(
 
 # ── Bot entry point ────────────────────────────────────────────────────────────
 
+GEMINI_VOICES = {"Puck", "Aoede", "Charon", "Fenrir", "Kore", "Leda", "Orus", "Zephyr"}
+
 async def run_bot(
     websocket,
     stream_id: str,
@@ -436,6 +438,7 @@ async def run_bot(
     customer_id: Optional[int] = None,
     callback_url: Optional[str] = None,
     to_number: Optional[str] = None,
+    voice: Optional[str] = None,
 ):
     """Run the Gemini Live bot for a single Plivo call."""
 
@@ -504,7 +507,7 @@ async def run_bot(
         api_key=os.getenv("GOOGLE_API_KEY"),
         system_instruction=effective_prompt,  # must be direct param — Settings path skips _system_instruction_from_init
         settings=GeminiLiveLLMService.Settings(
-            voice="Puck",  # Aoede | Charon | Fenrir | Kore | Puck
+            voice=voice or os.getenv("GEMINI_VOICE", "Puck"),  # Aoede | Charon | Fenrir | Kore | Leda | Orus | Puck | Zephyr
             vad=GeminiVADParams(
                 disabled=True,  # Silero owns all VAD
             ),

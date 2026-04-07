@@ -370,6 +370,22 @@ code{font-family:'JetBrains Mono',monospace;font-size:11.5px;background:#1e293b;
 
               <div class="divider"></div>
 
+              <!-- Voice -->
+              <div class="field">
+                <label class="lbl">Voice</label>
+                <select id="inp-voice">
+                  <option value="">Puck (default)</option>
+                  <option value="Aoede">Aoede — warm, melodic</option>
+                  <option value="Charon">Charon — deep, measured</option>
+                  <option value="Fenrir">Fenrir — energetic, clear</option>
+                  <option value="Kore">Kore — soft, expressive</option>
+                  <option value="Leda">Leda — bright, friendly</option>
+                  <option value="Orus">Orus — confident, smooth</option>
+                  <option value="Puck">Puck — playful, upbeat</option>
+                  <option value="Zephyr">Zephyr — calm, conversational</option>
+                </select>
+              </div>
+
               <!-- Instruction ID -->
               <div class="field">
                 <label class="lbl">Instruction ID <span style="color:#3d5068;font-weight:400">(system prompt file)</span></label>
@@ -1068,6 +1084,7 @@ async function makeCall() {
   const cid   = document.getElementById('inp-cid').value.trim();
   const cburl = document.getElementById('inp-callback').value.trim();
   const pname = document.getElementById('inp-prompt').value;
+  const voice = document.getElementById('inp-voice').value;
 
   if (!validPhone(phone)) {
     document.getElementById('phone-err').style.display = 'block';
@@ -1086,12 +1103,13 @@ async function makeCall() {
   if (cid)   payload.customer_id = parseInt(cid, 10);
   if (cburl) payload.callback_url = cburl;
   if (pname) payload.instruction_id = pname;
+  if (voice) payload.voice = voice;
 
   let entry;
   try {
     const result = await api('POST', '/api/call', payload);
     toast('Call initiated to ' + phone, 'ok');
-    entry = { phone, name, pname, ts: Date.now(), result, ok: true };
+    entry = { phone, name, pname, voice, ts: Date.now(), result, ok: true };
     saveRecentPhone(phone);
   } catch(e) {
     toast('Call failed: ' + e.message, 'err');

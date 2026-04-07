@@ -167,6 +167,7 @@ class CallRequest(BaseModel):
     customer_id: Optional[int] = None
     callback_url: Optional[str] = None
     instruction_id: Optional[str] = None  # filename (without .txt) of the system prompt to use
+    voice: Optional[str] = None           # Gemini voice: Puck | Aoede | Charon | Fenrir | Kore | Leda | Orus | Zephyr
 
 
 @app.post("/api/call")
@@ -191,6 +192,8 @@ async def make_call(req: CallRequest):
         payload["callback_url"] = req.callback_url
     if prompt_text:
         payload["system_prompt"] = prompt_text
+    if req.voice:
+        payload["voice"] = req.voice
 
     logger.info(
         f"Proxying call → {BOT_SERVER}/call | to={req.to} "
