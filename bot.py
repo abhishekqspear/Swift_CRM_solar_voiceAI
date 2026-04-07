@@ -5,6 +5,7 @@
 
 import json
 import os
+import time
 from typing import Optional
 
 import aiohttp
@@ -117,6 +118,7 @@ class _PhoneBotGeminiService(GeminiLiveLLMService):
         self._pre_buffer_max_bytes = 0       # computed on first audio frame
         self._transcript: list[dict] = []    # [{"role": "user"|"bot", "text": "..."}, …]
         self._bot_turn_buffer: str = ""      # accumulates output transcription within a turn
+        self._session_ready_time: float = 0.0  # monotonic time when Gemini session became ready
 
     def create_client(self):
         self._client = get_shared_client()
@@ -151,6 +153,7 @@ class _PhoneBotGeminiService(GeminiLiveLLMService):
         injecting send_client_content into an already-open audio turn.
         """
         await super()._handle_session_ready(session)
+        self._session_ready_time = time.monotonic()
         if self._session and not self._disconnecting:
             try:
                 from google.genai.types import Content, Part
@@ -191,6 +194,13 @@ class _PhoneBotGeminiService(GeminiLiveLLMService):
             await self._handle_send_error(e)
 
     async def _handle_user_started_speaking(self, frame):
+        # Ignore interruptions during the startup grace period so the bot can
+        # deliver its greeting before the user's "hello" on pickup cuts it off.
+        grace_secs = float(os.getenv("STARTUP_GRACE_SECS", "4.0"))
+        if self._session_ready_time and (time.monotonic() - self._session_ready_time) < grace_secs:
+            logger.debug(f"Ignoring speech start — within {grace_secs}s startup grace period")
+            return
+
         self._user_is_speaking = True
         # Snapshot and clear pre-buffer BEFORE any awaits so that audio frames
         # arriving while we yield to the event loop go directly to Gemini
