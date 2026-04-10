@@ -398,7 +398,7 @@ async def extract_lead_fields(transcript: list[dict]) -> dict:
 
 async def send_callback(
     callback_url: str,
-    customer_id: Optional[int],
+    lead_id: Optional[int],
     call_id: Optional[str],
     phone_number: Optional[str],
     fields: dict,
@@ -407,7 +407,7 @@ async def send_callback(
     """POST extracted lead data to the calling service's callback URL."""
     transcript_text = "\n".join(f"{t['role'].upper()}: {t['text']}" for t in transcript)
     payload = {
-        "customer_id": customer_id,
+        "lead_id": lead_id,
         "call_id": call_id,
         "phone_number": phone_number,
         "fields": fields,
@@ -420,7 +420,7 @@ async def send_callback(
                 json=payload,
                 timeout=aiohttp.ClientTimeout(total=15),
             ) as resp:
-                logger.info(f"Lead callback → {callback_url} HTTP {resp.status} | customer_id={customer_id}")
+                logger.info(f"Lead callback → {callback_url} HTTP {resp.status} | lead_id={lead_id}")
     except Exception as e:
         logger.error(f"Lead callback failed (url={callback_url}): {e}")
 
@@ -435,7 +435,7 @@ async def run_bot(
     call_id: Optional[str] = None,
     system_prompt: Optional[str] = None,
     customer_name: Optional[str] = None,
-    customer_id: Optional[int] = None,
+    lead_id: Optional[int] = None,
     callback_url: Optional[str] = None,
     to_number: Optional[str] = None,
     voice: Optional[str] = None,
@@ -551,7 +551,7 @@ async def run_bot(
             # customer_name is pre-known — use it if extraction didn't find a name
             if customer_name and fields.get("full_name") in (None, "Unknown", "UNKNOWN", ""):
                 fields["full_name"] = customer_name
-            await send_callback(callback_url, customer_id, call_id, to_number, fields, llm._transcript)
+            await send_callback(callback_url, lead_id, call_id, to_number, fields, llm._transcript)
 
     @transport.event_handler("on_session_timeout")
     async def on_session_timeout(transport, client):

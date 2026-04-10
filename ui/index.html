@@ -350,14 +350,14 @@ code{font-family:'JetBrains Mono',monospace;font-size:11.5px;background:#1e293b;
                 <div id="recent-wrap"></div>
               </div>
 
-              <!-- Name + Customer ID -->
+              <!-- Name + Lead ID -->
               <div class="field-row cols-2">
                 <div class="field">
                   <label class="lbl">Customer Name</label>
                   <input id="inp-name" type="text" placeholder="Rahul Sharma"/>
                 </div>
                 <div class="field">
-                  <label class="lbl">Customer ID</label>
+                  <label class="lbl">Lead ID</label>
                   <input id="inp-cid" type="number" placeholder="42"/>
                 </div>
               </div>
@@ -1100,7 +1100,7 @@ async function makeCall() {
 
   const payload = { to: phone };
   if (name)  payload.customer_name = name;
-  if (cid)   payload.customer_id = parseInt(cid, 10);
+  if (cid)   payload.lead_id = parseInt(cid, 10);
   if (cburl) payload.callback_url = cburl;
   if (pname) payload.instruction_id = pname;
   if (voice) payload.voice = voice;
@@ -1410,9 +1410,9 @@ function renderLeads() {
     phone.textContent = lead.phone_number || '—';
 
     const cidBadge = document.createElement('span');
-    if (lead.customer_id != null) {
+    if (lead.lead_id != null) {
       cidBadge.className = 'badge b-blue';
-      cidBadge.textContent = 'ID: ' + lead.customer_id;
+      cidBadge.textContent = 'ID: ' + lead.lead_id;
     }
 
     const timeBadge = document.createElement('span');
@@ -1436,7 +1436,7 @@ function renderLeads() {
 
     hdr.appendChild(dot);
     hdr.appendChild(phone);
-    if (lead.customer_id != null) hdr.appendChild(cidBadge);
+    if (lead.lead_id != null) hdr.appendChild(cidBadge);
     hdr.appendChild(timeBadge);
     hdr.appendChild(copyBtn);
     hdr.appendChild(chev);

@@ -63,3 +63,4 @@ RULES:
 - Do NOT assume missing data
 - Do NOT ask multiple questions at once
 - Do NOT be robotic or pushy
+- Reconfirm the data if is logically incorrect or not feasible

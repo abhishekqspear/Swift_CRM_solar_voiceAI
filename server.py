@@ -154,7 +154,7 @@ class CallRequest(BaseModel):
     from_: Optional[str] = None          # Override PLIVO_FROM_NUMBER from .env
     system_prompt: Optional[str] = None  # Per-call prompt override
     customer_name: Optional[str] = None  # Customer name injected into system prompt
-    customer_id: Optional[int] = None    # Customer ID passed back in the webhook callback
+    lead_id: Optional[int] = None    # Customer ID passed back in the webhook callback
     callback_url: Optional[str] = None   # URL to POST extracted lead data when call ends
     voice: Optional[str] = None          # Gemini voice: Puck | Aoede | Charon | Fenrir | Kore | Leda | Orus | Zephyr
 
@@ -168,7 +168,7 @@ async def make_outbound_call(req: CallRequest):
     Example::
         curl -X POST http://localhost:8090/call \\
              -H 'Content-Type: application/json' \\
-             -d '{"to": "+919876543210", "customer_id": 42, "customer_name": "Rahul", "callback_url": "https://your-service.com/lead"}'
+             -d '{"to": "+919876543210", "lead_id": 42, "customer_name": "Rahul", "callback_url": "https://your-service.com/lead"}'
     """
     auth_id = os.getenv("PLIVO_AUTH_ID")
     auth_token = os.getenv("PLIVO_AUTH_TOKEN")
@@ -193,7 +193,7 @@ async def make_outbound_call(req: CallRequest):
 
     params = []
     if req.customer_name: params.append(f"customer_name={quote(req.customer_name, safe='')}")
-    if req.customer_id is not None: params.append(f"customer_id={req.customer_id}")
+    if req.lead_id is not None: params.append(f"lead_id={req.lead_id}")
     if req.callback_url:  params.append(f"callback_url={quote(req.callback_url, safe='')}")
     params.append(f"call_sid={call_sid}")
     # to_number is passed so the bot can include it in the callback payload
@@ -245,7 +245,7 @@ async def answer_call(request: Request):
     qp = request.query_params
     params = []
     if qp.get("customer_name"): params.append(f"customer_name={quote(qp['customer_name'], safe='')}")
-    if qp.get("customer_id"):   params.append(f"customer_id={qp['customer_id']}")
+    if qp.get("lead_id"):   params.append(f"lead_id={qp['lead_id']}")
     if qp.get("callback_url"):  params.append(f"callback_url={quote(qp['callback_url'], safe='')}")
     if qp.get("call_sid"):      params.append(f"call_sid={qp['call_sid']}")
     if qp.get("to_number"):     params.append(f"to_number={quote(qp['to_number'], safe='')}")
@@ -272,7 +272,7 @@ async def answer_call(request: Request):
 async def websocket_endpoint(
     websocket: WebSocket,
     customer_name: Optional[str] = None,
-    customer_id: Optional[int] = None,
+    lead_id: Optional[int] = None,
     callback_url: Optional[str] = None,
     call_sid: Optional[str] = None,
     to_number: Optional[str] = None,
@@ -301,7 +301,7 @@ async def websocket_endpoint(
             call_id=proxy.call_id,
             system_prompt=system_prompt,
             customer_name=customer_name,
-            customer_id=customer_id,
+            lead_id=lead_id,
             callback_url=callback_url,
             to_number=to_number,
             voice=voice,

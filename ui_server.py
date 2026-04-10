@@ -164,7 +164,7 @@ async def delete_prompt(name: str):
 class CallRequest(BaseModel):
     to: str
     customer_name: Optional[str] = None
-    customer_id: Optional[int] = None
+    lead_id: Optional[int] = None
     callback_url: Optional[str] = None
     instruction_id: Optional[str] = None  # filename (without .txt) of the system prompt to use
     voice: Optional[str] = None           # Gemini voice: Puck | Aoede | Charon | Fenrir | Kore | Leda | Orus | Zephyr
@@ -186,8 +186,8 @@ async def make_call(req: CallRequest):
     payload: dict = {"to": req.to}
     if req.customer_name:
         payload["customer_name"] = req.customer_name
-    if req.customer_id is not None:
-        payload["customer_id"] = req.customer_id
+    if req.lead_id is not None:
+        payload["lead_id"] = req.lead_id
     if req.callback_url:
         payload["callback_url"] = req.callback_url
     if prompt_text:
@@ -229,7 +229,7 @@ async def receive_lead(request: Request):
     entry = {"received_at": int(time.time()), **data}
     _leads.appendleft(entry)
     logger.info(
-        f"Lead received | customer_id={data.get('customer_id')} "
+        f"Lead received | lead_id={data.get('lead_id')} "
         f"phone={data.get('phone_number')}"
     )
     return {"status": "ok"}
