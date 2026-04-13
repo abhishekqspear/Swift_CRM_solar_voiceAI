@@ -154,7 +154,7 @@ class CallRequest(BaseModel):
     from_: Optional[str] = None          # Override PLIVO_FROM_NUMBER from .env
     system_prompt: Optional[str] = None  # Per-call prompt override
     customer_name: Optional[str] = None  # Customer name injected into system prompt
-    lead_id: Optional[int] = None    # Customer ID passed back in the webhook callback
+    lead_id: Optional[str] = None    # Lead UUID passed back in the webhook callback
     callback_url: Optional[str] = None   # URL to POST extracted lead data when call ends
     voice: Optional[str] = None          # Gemini voice: Puck | Aoede | Charon | Fenrir | Kore | Leda | Orus | Zephyr
 
@@ -168,7 +168,7 @@ async def make_outbound_call(req: CallRequest):
     Example::
         curl -X POST http://localhost:8090/call \\
              -H 'Content-Type: application/json' \\
-             -d '{"to": "+919876543210", "lead_id": 42, "customer_name": "Rahul", "callback_url": "https://your-service.com/lead"}'
+             -d '{"to": "+919876543210", "lead_id": "550e8400-e29b-41d4-a716-446655440000", "customer_name": "Rahul", "callback_url": "https://your-service.com/lead"}'
     """
     auth_id = os.getenv("PLIVO_AUTH_ID")
     auth_token = os.getenv("PLIVO_AUTH_TOKEN")
@@ -272,7 +272,7 @@ async def answer_call(request: Request):
 async def websocket_endpoint(
     websocket: WebSocket,
     customer_name: Optional[str] = None,
-    lead_id: Optional[int] = None,
+    lead_id: Optional[str] = None,
     callback_url: Optional[str] = None,
     call_sid: Optional[str] = None,
     to_number: Optional[str] = None,

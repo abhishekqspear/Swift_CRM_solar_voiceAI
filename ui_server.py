@@ -164,7 +164,7 @@ async def delete_prompt(name: str):
 class CallRequest(BaseModel):
     to: str
     customer_name: Optional[str] = None
-    lead_id: Optional[int] = None
+    lead_id: Optional[str] = None
     callback_url: Optional[str] = None
     instruction_id: Optional[str] = None  # filename (without .txt) of the system prompt to use
     voice: Optional[str] = None           # Gemini voice: Puck | Aoede | Charon | Fenrir | Kore | Leda | Orus | Zephyr

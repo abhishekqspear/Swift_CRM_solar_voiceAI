@@ -137,8 +137,21 @@ class _PhoneBotGeminiService(GeminiLiveLLMService):
             self._bot_turn_buffer += text
 
     async def _handle_msg_turn_complete(self, message):
-        """Flush accumulated bot turn text to transcript on turn end."""
+        """Flush accumulated bot turn text to transcript on turn end.
+
+        Also flush any user transcription text stuck in the parent's buffer
+        (Gemini doesn't always send an end-of-sentence marker over phone audio,
+        leaving partial utterances that never reach _push_user_transcription).
+        """
+        # Flush parent's user transcription buffer before calling super()
+        # so the user turn is captured before the bot turn is flushed.
+        leftover = getattr(self, "_user_transcription_buffer", "").strip()
+        if leftover:
+            self._user_transcription_buffer = ""
+            self._transcript.append({"role": "user", "text": leftover})
+
         await super()._handle_msg_turn_complete(message)
+
         if self._bot_turn_buffer:
             self._transcript.append({"role": "bot", "text": self._bot_turn_buffer.strip()})
             self._bot_turn_buffer = ""
@@ -369,14 +382,19 @@ async def extract_lead_fields(transcript: list[dict]) -> dict:
     """Send transcript to Gemini REST and extract structured lead fields as JSON."""
     text = "\n".join(f"{t['role'].upper()}: {t['text']}" for t in transcript)
     prompt = (
-        "Extract the following fields from this solar sales call transcript. "
-        "Return ONLY valid JSON (no markdown, no explanation) with exactly these keys: "
-        "full_name, location, property_type (Residential/Commercial/Industrial/Unknown), "
-        "monthly_bill (exact words used by caller, e.g. '8000 rupees'), "
-        "roof_type (Concrete/Metal/Other/Not sure/Unknown), "
-        "ownership (Own/Rented/Unknown), "
-        "intent (INTERESTED/EXPLORING/NOT_INTERESTED/CALLBACK/UNKNOWN), "
-        "qualification (HIGH/LOW/UNKNOWN).\n\nTranscript:\n" + text
+        "Extract the following fields from this sales call transcript. "
+        "Return ONLY valid JSON (no markdown, no explanation) with exactly these keys:\n"
+        "- full_name: string\n"
+        "- location: string or 'Unknown'\n"
+        "- property_type: 'Residential' | 'Commercial' | 'Industrial' | 'Unknown'\n"
+        "- monthly_bill: exact words used by caller (e.g. '5000 rupees') or 'Unknown'\n"
+        "- roof_type: 'Concrete' | 'Metal' | 'Other' | 'Unknown'\n"
+        "- ownership: 'Own' | 'Rented' | 'Unknown'\n"
+        "- intent: 'INTERESTED' | 'EXPLORING' | 'NOT_INTERESTED' | 'CALLBACK' | 'DO_NOT_CALL' | 'UNKNOWN'\n"
+        "- interest_level: 'HOT' | 'WARM' | 'COLD' | 'UNKNOWN'\n"
+        "- qualification: 'QUALIFIED' | 'UNQUALIFIED' | 'UNKNOWN'\n"
+        "- callback_time: ISO 8601 datetime string if caller mentioned a specific callback time, otherwise null\n"
+        "\nTranscript:\n" + text
     )
     try:
         client = get_shared_client()
@@ -392,17 +410,18 @@ async def extract_lead_fields(transcript: list[dict]) -> dict:
         logger.error(f"Lead extraction failed: {e}")
         return {k: "UNKNOWN" for k in [
             "full_name", "location", "property_type", "monthly_bill",
-            "roof_type", "ownership", "intent", "qualification"
-        ]}
+            "roof_type", "ownership", "intent", "interest_level", "qualification",
+        ]} | {"callback_time": None}
 
 
 async def send_callback(
     callback_url: str,
-    lead_id: Optional[int],
+    lead_id: Optional[str],
     call_id: Optional[str],
     phone_number: Optional[str],
     fields: dict,
     transcript: list[dict],
+    call_duration_seconds: int = 0,
 ):
     """POST extracted lead data to the calling service's callback URL."""
     transcript_text = "\n".join(f"{t['role'].upper()}: {t['text']}" for t in transcript)
@@ -410,7 +429,19 @@ async def send_callback(
         "lead_id": lead_id,
         "call_id": call_id,
         "phone_number": phone_number,
-        "fields": fields,
+        "call_duration_seconds": call_duration_seconds,
+        "fields": {
+            "full_name":      fields.get("full_name", "Unknown"),
+            "location":       fields.get("location", "Unknown"),
+            "property_type":  fields.get("property_type", "Unknown"),
+            "monthly_bill":   fields.get("monthly_bill", "Unknown"),
+            "roof_type":      fields.get("roof_type", "Unknown"),
+            "ownership":      fields.get("ownership", "Unknown"),
+            "intent":         fields.get("intent", "UNKNOWN"),
+            "interest_level": fields.get("interest_level", "UNKNOWN"),
+            "qualification":  fields.get("qualification", "UNKNOWN"),
+            "callback_time":  fields.get("callback_time", None),
+        },
         "transcript": transcript_text,
     }
     try:
@@ -435,12 +466,14 @@ async def run_bot(
     call_id: Optional[str] = None,
     system_prompt: Optional[str] = None,
     customer_name: Optional[str] = None,
-    lead_id: Optional[int] = None,
+    lead_id: Optional[str] = None,
     callback_url: Optional[str] = None,
     to_number: Optional[str] = None,
     voice: Optional[str] = None,
 ):
     """Run the Gemini Live bot for a single Plivo call."""
+
+    _call_start = time.monotonic()
 
     # Load system prompt: explicit arg > .env SYSTEM_PROMPT > system_prompt.txt > hardcoded default
     _prompt_file = os.path.join(os.path.dirname(__file__), "system_prompt.txt")
@@ -551,7 +584,10 @@ async def run_bot(
             # customer_name is pre-known — use it if extraction didn't find a name
             if customer_name and fields.get("full_name") in (None, "Unknown", "UNKNOWN", ""):
                 fields["full_name"] = customer_name
-            await send_callback(callback_url, lead_id, call_id, to_number, fields, llm._transcript)
+            await send_callback(
+                callback_url, lead_id, call_id, to_number, fields, llm._transcript,
+                call_duration_seconds=int(time.monotonic() - _call_start),
+            )
 
     @transport.event_handler("on_session_timeout")
     async def on_session_timeout(transport, client):

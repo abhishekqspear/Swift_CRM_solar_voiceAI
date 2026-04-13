@@ -358,7 +358,7 @@ code{font-family:'JetBrains Mono',monospace;font-size:11.5px;background:#1e293b;
                 </div>
                 <div class="field">
                   <label class="lbl">Lead ID</label>
-                  <input id="inp-cid" type="number" placeholder="42"/>
+                  <input id="inp-cid" type="text" placeholder="uuid-or-id"/>
                 </div>
               </div>
 
@@ -1100,7 +1100,7 @@ async function makeCall() {
 
   const payload = { to: phone };
   if (name)  payload.customer_name = name;
-  if (cid)   payload.lead_id = parseInt(cid, 10);
+  if (cid)   payload.lead_id = cid;
   if (cburl) payload.callback_url = cburl;
   if (pname) payload.instruction_id = pname;
   if (voice) payload.voice = voice;
