@@ -15,6 +15,8 @@ from google.genai import Client
 from google.genai.types import ActivityEnd, ActivityStart, Blob, HttpOptions, ThinkingConfig
 from loguru import logger
 
+from pipecat.adapters.schemas.function_schema import FunctionSchema
+from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.frames.frames import (
@@ -119,6 +121,11 @@ class _PhoneBotGeminiService(GeminiLiveLLMService):
         self._transcript: list[dict] = []    # [{"role": "user"|"bot", "text": "..."}, …]
         self._bot_turn_buffer: str = ""      # accumulates output transcription within a turn
         self._session_ready_time: float = 0.0  # monotonic time when Gemini session became ready
+        # Transfer-to-human config (set by run_bot after init)
+        self._transfer_to_number: Optional[str] = None
+        self._transfer_key: Optional[str] = None        # call_sid used as _pending_transfers key
+        self._pending_transfers: Optional[dict] = None  # shared dict from server.py
+        self._task = None  # PipelineTask reference — used to close the stream on transfer
 
     def create_client(self):
         self._client = get_shared_client()
@@ -205,6 +212,44 @@ class _PhoneBotGeminiService(GeminiLiveLLMService):
             )
         except Exception as e:
             await self._handle_send_error(e)
+
+    async def _handle_msg_tool_call(self, message):
+        """Intercept transfer_to_human tool calls; delegate everything else to parent."""
+        function_calls = message.tool_call.function_calls if message.tool_call else []
+        for fc in function_calls:
+            if fc.name == "transfer_to_human":
+                logger.info("Tool call: transfer_to_human")
+                await self._do_transfer()
+                return
+        await super()._handle_msg_tool_call(message)
+
+    async def _do_transfer(self):
+        """Register a pending transfer and close the WebSocket stream.
+
+        When the Stream verb ends, Plivo POSTs to /after-stream which reads
+        _pending_transfers and returns <Dial> XML to bridge the caller to the
+        human agent number.
+        """
+        if not self._transfer_to_number:
+            logger.warning("transfer_to_human called but TRANSFER_TO_NUMBER is not set")
+            return
+        if not self._transfer_key:
+            logger.warning("transfer_to_human called but transfer_key (call_sid) is unknown")
+            return
+        if self._pending_transfers is None:
+            logger.warning("transfer_to_human called but pending_transfers store not set")
+            return
+
+        self._pending_transfers[self._transfer_key] = self._transfer_to_number
+        logger.info(
+            f"Transfer registered → {self._transfer_to_number} "
+            f"| call_sid={self._transfer_key} — closing stream"
+        )
+        # Cancel the pipeline task from outside the current call chain to avoid
+        # reentrancy issues. Plivo will then POST to /after-stream and dial the human.
+        if self._task:
+            import asyncio
+            asyncio.create_task(self._task.cancel())
 
     async def _handle_user_started_speaking(self, frame):
         # Ignore interruptions during the startup grace period so the bot can
@@ -398,7 +443,7 @@ async def extract_lead_fields(transcript: list[dict]) -> dict:
     )
     try:
         client = get_shared_client()
-        response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
+        response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
         raw = response.text.strip()
         # Strip markdown code fence if Gemini wraps the JSON
         if raw.startswith("```"):
@@ -464,12 +509,15 @@ async def run_bot(
     websocket,
     stream_id: str,
     call_id: Optional[str] = None,
+    call_sid: Optional[str] = None,
     system_prompt: Optional[str] = None,
     customer_name: Optional[str] = None,
     lead_id: Optional[str] = None,
     callback_url: Optional[str] = None,
     to_number: Optional[str] = None,
     voice: Optional[str] = None,
+    transfer_to_number: Optional[str] = None,
+    pending_transfers: Optional[dict] = None,
 ):
     """Run the Gemini Live bot for a single Plivo call."""
 
@@ -501,7 +549,7 @@ async def run_bot(
         call_id=call_id,
         auth_id=os.getenv("PLIVO_AUTH_ID"),
         auth_token=os.getenv("PLIVO_AUTH_TOKEN"),
-        params=PlivoFrameSerializer.InputParams(auto_hang_up=True),
+        params=PlivoFrameSerializer.InputParams(auto_hang_up=False),
     )
 
     # ── Transport ─────────────────────────────────────────────────────────────
@@ -534,11 +582,26 @@ async def run_bot(
         energy_threshold=int(os.getenv("INTERRUPTION_ENERGY_THRESHOLD", "600")),
     )
 
+    # ── Transfer tool (registered if TRANSFER_TO_NUMBER is set) ──────────────
+    _tools = None
+    if transfer_to_number:
+        _transfer_fn = FunctionSchema(
+            name="transfer_to_human",
+            description=(
+                "Transfer the call to a human agent. "
+                "Call this when the caller explicitly asks to speak with a person or human agent."
+            ),
+            properties={},
+            required=[],
+        )
+        _tools = ToolsSchema(standard_tools=[_transfer_fn])
+
     # ── Gemini Live ───────────────────────────────────────────────────────────
     logger.debug(f"system_instruction preview: {effective_prompt[:120]!r}")
     llm = _PhoneBotGeminiService(
         api_key=os.getenv("GOOGLE_API_KEY"),
         system_instruction=effective_prompt,  # must be direct param — Settings path skips _system_instruction_from_init
+        tools=_tools,
         settings=GeminiLiveLLMService.Settings(
             voice=voice or os.getenv("GEMINI_VOICE", "Puck"),  # Aoede | Charon | Fenrir | Kore | Leda | Orus | Puck | Zephyr
             vad=GeminiVADParams(
@@ -547,6 +610,11 @@ async def run_bot(
             thinking=ThinkingConfig(thinking_budget=0),  # disable reasoning → low latency
         ),
     )
+
+    # Inject transfer config so _do_transfer can act without pipeline context
+    llm._transfer_to_number = transfer_to_number
+    llm._transfer_key = call_sid          # matches the key in the /after-stream action URL
+    llm._pending_transfers = pending_transfers
 
     # ── Pipeline ──────────────────────────────────────────────────────────────
     pipeline = Pipeline(
@@ -567,6 +635,7 @@ async def run_bot(
             enable_usage_metrics=True,
         ),
     )
+    llm._task = task  # allows _do_transfer to cancel the pipeline (close stream → Plivo dials human)
 
     # ── Events ────────────────────────────────────────────────────────────────
 
@@ -578,6 +647,26 @@ async def run_bot(
     async def on_client_disconnected(transport, client):
         logger.info(f"Client disconnected | stream_id={stream_id}")
         await task.cancel()
+
+        # Hang up via Plivo REST only when NOT transferring to a human.
+        # For transfers, auto_hang_up is disabled so Plivo can POST to /after-stream
+        # and dial the human agent instead of just terminating.
+        is_transfer = pending_transfers and call_sid and call_sid in pending_transfers
+        if not is_transfer and call_id:
+            try:
+                async with aiohttp.ClientSession() as _s:
+                    await _s.delete(
+                        f"https://api.plivo.com/v1/Account/{os.getenv('PLIVO_AUTH_ID')}/Call/{call_id}/",
+                        auth=aiohttp.BasicAuth(
+                            os.getenv("PLIVO_AUTH_ID", ""),
+                            os.getenv("PLIVO_AUTH_TOKEN", ""),
+                        ),
+                        timeout=aiohttp.ClientTimeout(total=5),
+                    )
+                    logger.debug(f"Hung up call {call_id} via REST")
+            except Exception as e:
+                logger.debug(f"Hang-up REST call failed (may already be ended): {e}")
+
         if callback_url:
             logger.info(f"Extracting lead fields from {len(llm._transcript)} transcript turns")
             fields = await extract_lead_fields(llm._transcript)

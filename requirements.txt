@@ -1,5 +1,5 @@
 # Core Pipecat (install from local checkout)
-# pip install -e ./pipecat[google,websocket,silero]
+pip install -e ./pipecat[google,websocket,silero]
 
 # Or install released package:
 # pipecat-ai[google,websocket,silero]
