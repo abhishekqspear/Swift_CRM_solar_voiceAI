@@ -361,7 +361,7 @@ async def generate_prompt(req: GeneratePromptRequest):
         client = _get_gen_client()
         response = await asyncio.to_thread(
             client.models.generate_content,
-            model="gemini-2.0-flash",
+            model="gemini-2.5-flash",
             contents=meta,
             config=GenerateContentConfig(
                 temperature=0.75,

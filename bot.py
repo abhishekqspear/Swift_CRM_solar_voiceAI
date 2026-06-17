@@ -398,7 +398,7 @@ async def extract_lead_fields(transcript: list[dict]) -> dict:
     )
     try:
         client = get_shared_client()
-        response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
+        response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
         raw = response.text.strip()
         # Strip markdown code fence if Gemini wraps the JSON
         if raw.startswith("```"):
