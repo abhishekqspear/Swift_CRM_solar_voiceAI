@@ -6,7 +6,9 @@
 import json
 import os
 import time
+from datetime import datetime
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 import aiohttp
 import numpy as np
@@ -381,7 +383,21 @@ class EarlyInterruptor(FrameProcessor):
 async def extract_lead_fields(transcript: list[dict]) -> dict:
     """Send transcript to Gemini REST and extract structured lead fields as JSON."""
     text = "\n".join(f"{t['role'].upper()}: {t['text']}" for t in transcript)
+
+    # Give Gemini a concrete "now" so it can resolve relative phrases like
+    # "in ten minutes" / "kal" / "at 3pm" into an absolute ISO 8601 datetime
+    # in the caller's local timezone. CALLBACK_TZ defaults to IST for the
+    # current Indian dev/QA — set CALLBACK_TZ=Australia/Sydney for AU prod.
+    tz_name = os.environ.get("CALLBACK_TZ", "Asia/Kolkata")
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = ZoneInfo("Asia/Kolkata")
+    now_local = datetime.now(tz)
+    now_iso = now_local.isoformat(timespec="seconds")
+
     prompt = (
+        f"Current time is {now_iso} (timezone: {tz_name}). "
         "Extract the following fields from this sales call transcript. "
         "Return ONLY valid JSON (no markdown, no explanation) with exactly these keys:\n"
         "- full_name: string\n"
@@ -393,7 +409,17 @@ async def extract_lead_fields(transcript: list[dict]) -> dict:
         "- intent: 'INTERESTED' | 'EXPLORING' | 'NOT_INTERESTED' | 'CALLBACK' | 'DO_NOT_CALL' | 'UNKNOWN'\n"
         "- interest_level: 'HOT' | 'WARM' | 'COLD' | 'UNKNOWN'\n"
         "- qualification: 'QUALIFIED' | 'UNQUALIFIED' | 'UNKNOWN'\n"
-        "- callback_time: ISO 8601 datetime string if caller mentioned a specific callback time, otherwise null\n"
+        "- callback_time: ABSOLUTE ISO 8601 datetime with timezone offset (e.g. "
+        f"'{now_iso}') if caller mentioned any callback timing, otherwise null. "
+        "Convert relative phrases using the current time above:\n"
+        f"  * 'in 10 minutes' / '10 minute me' / 'after ten minutes' → current time + 10 min\n"
+        f"  * 'in 2 hours' / '2 ghante me' → current time + 2 hr\n"
+        f"  * 'tomorrow' / 'kal' (no specific time) → next day, same hour\n"
+        f"  * 'at 3 pm' / '3 baje' / '15:00' → today at 15:00 in {tz_name}, "
+        "or tomorrow if 15:00 has already passed today\n"
+        f"  * 'tomorrow at 9 am' / 'kal 9 baje' → next day at 09:00 in {tz_name}\n"
+        "  Always return a fully-qualified ISO datetime with the timezone offset; "
+        "never a bare time string. Return null only if no timing was mentioned.\n"
         "\nTranscript:\n" + text
     )
     try:

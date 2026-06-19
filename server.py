@@ -14,6 +14,7 @@ import os
 import re
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Optional
 
 import aiohttp
@@ -56,6 +57,21 @@ app = FastAPI(title="Plivo Gemini Live Phone Bot", lifespan=lifespan)
 # Entries are cleaned up after the WebSocket session ends
 _call_prompts: dict[str, str] = {}
 _call_voices: dict[str, str] = {}
+
+
+# ── Prompt lookup (mirrors ui_server.py so /call accepts instruction_id) ──────
+
+PROMPTS_DIR = Path(__file__).parent / "prompts"
+PROMPTS_DIR.mkdir(exist_ok=True)
+
+
+def _safe_name(name: str) -> str:
+    """Sanitize a prompt filename — same rules as ui_server._safe_name."""
+    name = name.removesuffix(".txt").strip()
+    name = re.sub(r"[^\w\-]", "_", name)
+    if not name:
+        raise HTTPException(status_code=400, detail="Invalid prompt name")
+    return name
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -152,7 +168,8 @@ class _PlivoWebSocketProxy:
 class CallRequest(BaseModel):
     to: str                              # E.164 number to dial, e.g. "+919876543210"
     from_: Optional[str] = None          # Override PLIVO_FROM_NUMBER from .env
-    system_prompt: Optional[str] = None  # Per-call prompt override
+    system_prompt: Optional[str] = None  # Per-call prompt override (full text)
+    instruction_id: Optional[str] = None # Filename (without .txt) inside prompts/; loaded if system_prompt is not set
     customer_name: Optional[str] = None  # Customer name injected into system prompt
     lead_id: Optional[str] = None    # Lead UUID passed back in the webhook callback
     callback_url: Optional[str] = None   # URL to POST extracted lead data when call ends
@@ -185,7 +202,31 @@ async def make_outbound_call(req: CallRequest):
     from urllib.parse import quote
     # Store system_prompt and voice server-side to avoid URL length limits
     call_sid = uuid.uuid4().hex[:16]
-    effective_prompt = req.system_prompt or os.getenv("SYSTEM_PROMPT")
+
+    # Resolve the prompt — order: explicit text > instruction_id file > SYSTEM_PROMPT env
+    # (bot.py applies the system_prompt.txt fallback if everything below is empty.)
+    effective_prompt: Optional[str] = None
+    prompt_source = "default"
+    if req.system_prompt:
+        effective_prompt = req.system_prompt
+        prompt_source = "system_prompt"
+    elif req.instruction_id:
+        path = PROMPTS_DIR / f"{_safe_name(req.instruction_id)}.txt"
+        if not path.exists():
+            raise HTTPException(
+                status_code=404, detail=f"Instruction '{req.instruction_id}' not found"
+            )
+        effective_prompt = path.read_text(encoding="utf-8")
+        prompt_source = f"instruction_id={req.instruction_id}"
+    elif os.getenv("SYSTEM_PROMPT"):
+        effective_prompt = os.getenv("SYSTEM_PROMPT")
+        prompt_source = "env"
+
+    logger.info(
+        f"/call prompt source: {prompt_source} "
+        f"({len(effective_prompt or '')} chars) instruction_id={req.instruction_id!r}"
+    )
+
     if effective_prompt:
         _call_prompts[call_sid] = effective_prompt
     if req.voice:
