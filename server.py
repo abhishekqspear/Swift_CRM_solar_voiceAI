@@ -30,7 +30,25 @@ from starlette.websockets import WebSocketState
 
 load_dotenv(override=True)
 
-from bot import prewarm_gemini, run_bot
+from bot import get_shared_client, prewarm_gemini, run_bot, trim_prompt_for_live
+
+
+async def _prewarm_greeting_model() -> None:
+    """Warm the native-audio Live model path (DNS/TLS/handshake) at startup.
+
+    Opens and immediately closes a Live session so the first real greeting
+    render connects faster and reliably finishes within the ring window.
+    Non-fatal — greeting pre-render is best-effort regardless.
+    """
+    try:
+        voice = os.getenv("GEMINI_VOICE", "Puck")
+        config = _greeting_live_config(system_instruction=None, voice=voice)
+        async with asyncio.timeout(15):
+            async with get_shared_client().aio.live.connect(model=_greeting_model(), config=config):
+                pass  # entering the context manager performs the connect handshake
+        logger.info(f"Greeting model (native-audio) pre-warmed (voice={voice})")
+    except Exception as e:
+        logger.warning(f"Greeting model pre-warm failed (non-fatal): {e}")
 
 
 @asynccontextmanager
@@ -41,11 +59,13 @@ async def lifespan(app: FastAPI):
     - google-genai SDK (imports, object init)
     - DNS + TLS for generativelanguage.googleapis.com
     - Shared Gemini API client (reused across all calls)
+    - Native-audio Live model path (so the first pre-rendered greeting isn't cold)
 
     Result: first call connects to Gemini Live ~2–3× faster than cold start.
     """
     logger.info("Server starting — pre-warming Gemini services …")
     await prewarm_gemini()
+    await _prewarm_greeting_model()
     logger.info("All services ready. Accepting calls.")
     yield
     logger.info("Server shutting down.")
@@ -57,6 +77,21 @@ app = FastAPI(title="Plivo Gemini Live Phone Bot", lifespan=lifespan)
 # Entries are cleaned up after the WebSocket session ends
 _call_prompts: dict[str, str] = {}
 _call_voices: dict[str, str] = {}
+# Per-call pre-rendered greeting: (pcm_bytes, sample_rate) and the spoken text,
+# keyed by call_sid. Rendered during the ring window in make_outbound_call and
+# consumed (popped) in websocket_endpoint. Absence → fall back to live greeting.
+_call_greetings: dict[str, tuple[bytes, int]] = {}
+_call_greeting_texts: dict[str, str] = {}
+
+# Model used to pre-render the greeting clip. MUST match the model the live
+# conversation uses so the greeting voice is identical to the rest of the call.
+# Honors GEMINI_LIVE_MODEL (same override bot.py uses) and falls back to the
+# pipecat default native-audio model.
+_GREETING_MODEL_DEFAULT = "models/gemini-2.5-flash-native-audio-preview-12-2025"
+
+
+def _greeting_model() -> str:
+    return os.getenv("GEMINI_LIVE_MODEL") or _GREETING_MODEL_DEFAULT
 
 
 # ── Prompt lookup (mirrors ui_server.py so /call accepts instruction_id) ──────
@@ -72,6 +107,149 @@ def _safe_name(name: str) -> str:
     if not name:
         raise HTTPException(status_code=400, detail="Invalid prompt name")
     return name
+
+
+# ── Greeting pre-render (mask Gemini Live cold-start) ─────────────────────────
+
+def _extract_greeting_line(prompt: Optional[str], customer_name: Optional[str]) -> Optional[str]:
+    """Pull the bot's opening line out of a system prompt for pre-rendering.
+
+    The prompts put the greeting as the first double-quoted string under the
+    ``START:`` heading, e.g.::
+
+        START:
+        Greet the user by name: "Hi {customer_name}! This is Swift. ..."
+
+    Returns the quoted line with ``{customer_name}`` substituted, or None if no
+    greeting line can be found (caller then falls back to the live greeting).
+    """
+    if not prompt:
+        return None
+    m = re.search(r"START\s*:", prompt, re.IGNORECASE)
+    region = prompt[m.end():] if m else prompt
+    q = re.search(r'"([^"]+)"', region)
+    if not q:
+        return None
+    line = q.group(1).strip()
+    line = line.replace("{customer_name}", customer_name or "there")
+    return line or None
+
+
+def _greeting_live_config(system_instruction: Optional[str], voice: str):
+    """Build a LiveConnectConfig for one-shot greeting generation.
+
+    Mirrors the pipeline's connect config (AUDIO modality, same voice,
+    thinking disabled) so the rendered greeting matches the live conversation.
+    """
+    from google.genai.types import (
+        AudioTranscriptionConfig,
+        LiveConnectConfig,
+        Modality,
+        PrebuiltVoiceConfig,
+        SpeechConfig,
+        ThinkingConfig,
+        VoiceConfig,
+    )
+
+    # Set fields directly on LiveConnectConfig — the generation_config wrapper
+    # is deprecated in google-genai.
+    config = LiveConnectConfig(
+        response_modalities=[Modality.AUDIO],
+        speech_config=SpeechConfig(
+            voice_config=VoiceConfig(prebuilt_voice_config=PrebuiltVoiceConfig(voice_name=voice)),
+        ),
+        output_audio_transcription=AudioTranscriptionConfig(),
+    )
+    if system_instruction:
+        config.system_instruction = system_instruction
+    config.thinking_config = ThinkingConfig(thinking_budget=0)
+    return config
+
+
+async def prerender_greeting(
+    call_sid: str,
+    prompt: Optional[str],
+    customer_name: Optional[str],
+    voice: str,
+) -> None:
+    """Render the greeting during the ring window using the SAME native-audio
+    model the live conversation uses (so the voice is identical).
+
+    Opens a short throwaway Gemini Live session, sends the greeting trigger,
+    captures the generated audio (24kHz PCM) + its transcription, then closes.
+    Stores PCM in ``_call_greetings[call_sid]`` and text in
+    ``_call_greeting_texts[call_sid]``. On any failure both dicts are left clean
+    so the WebSocket handler falls through to the existing live-greeting path.
+    """
+    try:
+        # If the prompt wasn't resolved at /call time, mirror bot.py's fallback.
+        if not prompt:
+            try:
+                prompt = (Path(__file__).parent / "system_prompt.txt").read_text(encoding="utf-8")
+            except Exception:
+                prompt = None
+        if not prompt:
+            logger.info(f"prerender_greeting: no prompt available | call_sid={call_sid}")
+            return
+
+        system_instruction = prompt.replace("{customer_name}", customer_name or "the caller")
+        system_instruction = trim_prompt_for_live(system_instruction)
+        fallback_text = _extract_greeting_line(prompt, customer_name)
+
+        from google.genai.types import Content, Part
+
+        config = _greeting_live_config(system_instruction, voice)
+        pcm = bytearray()
+        text_parts: list[str] = []
+
+        # 20s ceiling so a stuck turn can never hang the background task.
+        async with asyncio.timeout(20):
+            async with get_shared_client().aio.live.connect(model=_greeting_model(), config=config) as session:
+                await session.send_client_content(
+                    turns=[Content(role="user", parts=[Part(
+                        text="The call has connected. Begin the conversation per your instructions."
+                    )])],
+                    turn_complete=True,
+                )
+                async for message in session.receive():
+                    sc = getattr(message, "server_content", None)
+                    if not sc:
+                        continue
+                    if sc.model_turn and sc.model_turn.parts:
+                        for part in sc.model_turn.parts:
+                            if part.inline_data and part.inline_data.data:
+                                pcm.extend(part.inline_data.data)
+                    if sc.output_transcription and sc.output_transcription.text:
+                        text_parts.append(sc.output_transcription.text)
+                    if sc.turn_complete:
+                        break
+
+        if not pcm:
+            logger.warning(f"prerender_greeting: no audio generated | call_sid={call_sid}")
+            return
+
+        # Prefer the actually-spoken transcript; fall back to the prompt's START line.
+        greeting_text = ("".join(text_parts).strip() or (fallback_text or "")).strip()
+
+        _call_greetings[call_sid] = (bytes(pcm), 24000)
+        _call_greeting_texts[call_sid] = greeting_text
+        logger.info(
+            f"prerender_greeting: cached {len(pcm)} bytes (native-audio) | "
+            f"call_sid={call_sid} voice={voice} text={greeting_text!r}"
+        )
+    except Exception as e:
+        logger.error(f"prerender_greeting failed (call_sid={call_sid}): {e}")
+        # Never leave a partial entry — guarantees a clean live-greeting fallback.
+        _call_greetings.pop(call_sid, None)
+        _call_greeting_texts.pop(call_sid, None)
+
+
+def _discard_call(call_sid: str) -> None:
+    """Drop all stored per-call state for a call that won't proceed."""
+    _call_prompts.pop(call_sid, None)
+    _call_voices.pop(call_sid, None)
+    _call_greetings.pop(call_sid, None)
+    _call_greeting_texts.pop(call_sid, None)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -232,6 +410,8 @@ async def make_outbound_call(req: CallRequest):
     if req.voice:
         _call_voices[call_sid] = req.voice
 
+    greeting_voice = req.voice or os.getenv("GEMINI_VOICE", "Puck")
+
     params = []
     if req.customer_name: params.append(f"customer_name={quote(req.customer_name, safe='')}")
     if req.lead_id is not None: params.append(f"lead_id={req.lead_id}")
@@ -255,9 +435,17 @@ async def make_outbound_call(req: CallRequest):
         "answer_url": answer_url,
         "answer_method": "POST",
     }
+    endpoint = f"https://api.plivo.com/v1/Account/{auth_id}/Call/"
+
+    # Best-effort greeting pre-render in the background. It races the ring: the
+    # greeting is instant when the render finishes before pickup, and falls back
+    # to the live greeting otherwise. The dial below stays synchronous so the call
+    # goes out immediately and Plivo errors surface in the /call response.
+    asyncio.create_task(
+        prerender_greeting(call_sid, effective_prompt, req.customer_name, greeting_voice)
+    )
 
     logger.info(f"Calling Plivo API | from={from_clean} to={to_clean} answer_url={answer_url}")
-    endpoint = f"https://api.plivo.com/v1/Account/{auth_id}/Call/"
     async with aiohttp.ClientSession() as session:
         async with session.post(
             endpoint,
@@ -267,6 +455,7 @@ async def make_outbound_call(req: CallRequest):
             body = await response.json()
             if response.status not in (200, 201, 202):
                 logger.error(f"Plivo outbound call failed: {response.status} {body}")
+                _discard_call(call_sid)
                 raise HTTPException(status_code=response.status, detail=body)
 
     logger.info(f"Outbound call initiated | to={req.to} answer_url={answer_url}")
@@ -327,6 +516,11 @@ async def websocket_endpoint(
     system_prompt = system_prompt or os.getenv("SYSTEM_PROMPT")
     voice = _call_voices.pop(call_sid, None) if call_sid else None
 
+    # Consume the pre-rendered greeting clip (if it finished during the ring).
+    greeting = _call_greetings.pop(call_sid, None) if call_sid else None
+    greeting_text = _call_greeting_texts.pop(call_sid, None) if call_sid else None
+    greeting_pcm, greeting_rate = greeting if greeting else (None, None)
+
     # Step 1: Extract Plivo metadata from start event
     proxy = _PlivoWebSocketProxy(websocket)
     await proxy.wait_for_start()
@@ -346,6 +540,9 @@ async def websocket_endpoint(
             callback_url=callback_url,
             to_number=to_number,
             voice=voice,
+            greeting_pcm=greeting_pcm,
+            greeting_rate=greeting_rate,
+            greeting_text=greeting_text,
         )
     except Exception as e:
         logger.error(f"Bot error for stream_id={proxy.stream_id}: {e}", exc_info=True)

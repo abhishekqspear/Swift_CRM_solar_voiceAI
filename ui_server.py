@@ -200,17 +200,26 @@ async def make_call(req: CallRequest):
         f"customer={req.customer_name} instruction_id={req.instruction_id or '(server default)'}"
     )
 
-    async with aiohttp.ClientSession() as session:
-        async with session.post(
-            f"{BOT_SERVER}/call",
-            json=payload,
-            timeout=aiohttp.ClientTimeout(total=15),
-        ) as resp:
-            body = await resp.json()
-            if resp.status not in (200, 201, 202):
-                logger.error(f"Bot server /call failed: {resp.status} {body}")
-                raise HTTPException(status_code=resp.status, detail=body)
-            return body
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{BOT_SERVER}/call",
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as resp:
+                body = await resp.json()
+                if resp.status not in (200, 201, 202):
+                    logger.error(f"Bot server /call failed: {resp.status} {body}")
+                    raise HTTPException(status_code=resp.status, detail=body)
+                return body
+    except aiohttp.ClientError as e:
+        # Bot server (server.py on :8090) unreachable — return a clean error
+        # instead of a 500 stack trace.
+        logger.error(f"Cannot reach bot server at {BOT_SERVER}: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail=f"Bot server unreachable at {BOT_SERVER} — is server.py running on :8090?",
+        )
 
 
 # ── Lead webhook receiver ─────────────────────────────────────────────────────

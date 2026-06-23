@@ -5,6 +5,7 @@
 
 import json
 import os
+import re
 import time
 from datetime import datetime
 from typing import Optional
@@ -25,6 +26,9 @@ from pipecat.frames.frames import (
     Frame,
     InputAudioRawFrame,
     OutputTransportMessageUrgentFrame,
+    TTSAudioRawFrame,
+    TTSStartedFrame,
+    TTSStoppedFrame,
     UserStartedSpeakingFrame,
     UserStoppedSpeakingFrame,
     VADUserStartedSpeakingFrame,
@@ -121,9 +125,21 @@ class _PhoneBotGeminiService(GeminiLiveLLMService):
         self._transcript: list[dict] = []    # [{"role": "user"|"bot", "text": "..."}, …]
         self._bot_turn_buffer: str = ""      # accumulates output transcription within a turn
         self._session_ready_time: float = 0.0  # monotonic time when Gemini session became ready
+        # Pre-rendered greeting (played instantly on connect to mask Gemini cold-start)
+        self._greeting_prerendered: bool = False  # True when a TTS greeting clip will be / was played
+        self._greeting_text: Optional[str] = None  # text of the pre-rendered greeting (seeded into history)
+        self._greeting_started_time: float = 0.0  # monotonic time the greeting clip was queued
+        self._first_chunk_logged: bool = False  # one-shot guard for first-audio latency log
+        self._connect_start_time: float = 0.0  # monotonic time the Gemini connect began
 
     def create_client(self):
         self._client = get_shared_client()
+
+    async def _connect(self, session_resumption_handle=None):
+        """Record connect-start for session-open latency instrumentation."""
+        if not self._connect_start_time:
+            self._connect_start_time = time.monotonic()
+        await super()._connect(session_resumption_handle=session_resumption_handle)
 
     async def _push_user_transcription(self, text, result=None):
         """Capture complete user sentences into the transcript."""
@@ -169,17 +185,48 @@ class _PhoneBotGeminiService(GeminiLiveLLMService):
         """
         await super()._handle_session_ready(session)
         self._session_ready_time = time.monotonic()
+        if self._connect_start_time:
+            logger.info(
+                f"[latency] connect_start→session_ready "
+                f"{(self._session_ready_time - self._connect_start_time) * 1000:.0f}ms "
+                f"(Gemini session open + system_instruction parse)"
+            )
         if self._session and not self._disconnecting:
             try:
-                from google.genai.types import Content, Part
-                greeting_turn = Content(
-                    role="user",
-                    parts=[Part(text="The call has connected. Begin the conversation per your instructions.")],
+                if self._greeting_prerendered:
+                    # Greeting was already spoken via the pre-rendered clip, and the
+                    # live model's system instruction already tells it the greeting
+                    # happened (see run_bot). So send NOTHING here — no live greeting
+                    # trigger — and let the caller's first utterance drive turn 2.
+                    logger.info("Pre-rendered greeting played; live greeting trigger suppressed")
+                else:
+                    from google.genai.types import Content, Part
+                    greeting_turn = Content(
+                        role="user",
+                        parts=[Part(text="The call has connected. Begin the conversation per your instructions.")],
+                    )
+                    await self._session.send_client_content(turns=[greeting_turn], turn_complete=True)
+                    logger.debug("Sent greeting trigger to Gemini")
+                logger.info(
+                    f"[latency] session_ready→greeting_sent "
+                    f"{(time.monotonic() - self._session_ready_time) * 1000:.0f}ms"
                 )
-                await self._session.send_client_content(turns=[greeting_turn], turn_complete=True)
-                logger.debug("Sent greeting trigger to Gemini")
             except Exception as e:
                 logger.warning(f"Greeting trigger failed: {e}")
+
+    async def _handle_msg_model_turn(self, msg):
+        """Instrumentation: log latency from session-ready to the first model turn.
+
+        In the live-greeting path this is the greeting generation TTFB; in the
+        pre-rendered path it is the response to the caller's first utterance.
+        """
+        if not self._first_chunk_logged and self._session_ready_time:
+            self._first_chunk_logged = True
+            logger.info(
+                f"[latency] session_ready→first_model_turn "
+                f"{(time.monotonic() - self._session_ready_time) * 1000:.0f}ms"
+            )
+        await super()._handle_msg_model_turn(msg)
 
     async def _send_user_audio(self, frame):
         """Pre-buffer audio; only send to Gemini during active speech windows."""
@@ -211,8 +258,17 @@ class _PhoneBotGeminiService(GeminiLiveLLMService):
     async def _handle_user_started_speaking(self, frame):
         # Ignore interruptions during the startup grace period so the bot can
         # deliver its greeting before the user's "hello" on pickup cuts it off.
+        # The window is active if EITHER the session just became ready OR a
+        # pre-rendered greeting clip just started playing — the latter happens
+        # BEFORE the session is ready, so keying off session_ready alone would
+        # let a pre-roll "hello" bypass the grace period.
         grace_secs = float(os.getenv("STARTUP_GRACE_SECS", "4.0"))
-        if self._session_ready_time and (time.monotonic() - self._session_ready_time) < grace_secs:
+        now = time.monotonic()
+        in_grace = (
+            (self._session_ready_time and (now - self._session_ready_time) < grace_secs)
+            or (self._greeting_started_time and (now - self._greeting_started_time) < grace_secs)
+        )
+        if in_grace:
             logger.debug(f"Ignoring speech start — within {grace_secs}s startup grace period")
             return
 
@@ -482,6 +538,37 @@ async def send_callback(
         logger.error(f"Lead callback failed (url={callback_url}): {e}")
 
 
+# ── Prompt trimming for the live model ──────────────────────────────────────────
+
+# Sections that only matter for POST-call lead extraction (done separately by
+# extract_lead_fields on the transcript). They add nothing to the live
+# conversation but are billed as input tokens on every turn — so strip them from
+# the prompt sent to the live model. The bot still gets role, style, info to
+# collect, intent + DO_NOT_CALL triggers, conversation flow, and rules.
+_LIVE_PROMPT_DROP_SECTIONS = ("OUTPUT FIELDS", "INTEREST LEVEL CLASSIFICATION")
+_SECTION_HEADER_RE = re.compile(r"^[A-Z][A-Z0-9 /()\-]*:$")
+
+
+def trim_prompt_for_live(prompt: str) -> str:
+    """Drop post-call-only sections from the system prompt sent to the live model.
+
+    Section headers are UPPERCASE lines ending in ':'. A dropped section runs
+    until the next recognized header. Unrecognized prompts are returned
+    unchanged, so this is safe for arbitrary prompt text.
+    """
+    if not prompt:
+        return prompt
+    out: list[str] = []
+    skipping = False
+    for line in prompt.split("\n"):
+        stripped = line.strip()
+        if _SECTION_HEADER_RE.match(stripped):
+            skipping = stripped[:-1].strip() in _LIVE_PROMPT_DROP_SECTIONS
+        if not skipping:
+            out.append(line)
+    return "\n".join(out).strip()
+
+
 # ── Bot entry point ────────────────────────────────────────────────────────────
 
 GEMINI_VOICES = {"Puck", "Aoede", "Charon", "Fenrir", "Kore", "Leda", "Orus", "Zephyr"}
@@ -496,19 +583,25 @@ async def run_bot(
     callback_url: Optional[str] = None,
     to_number: Optional[str] = None,
     voice: Optional[str] = None,
+    greeting_pcm: Optional[bytes] = None,
+    greeting_rate: Optional[int] = None,
+    greeting_text: Optional[str] = None,
 ):
     """Run the Gemini Live bot for a single Plivo call."""
 
     _call_start = time.monotonic()
 
-    # Load system prompt: explicit arg > .env SYSTEM_PROMPT > system_prompt.txt > hardcoded default
-    _prompt_file = os.path.join(os.path.dirname(__file__), "system_prompt.txt")
+    # Load system prompt: explicit arg > .env SYSTEM_PROMPT > system_prompt.txt > hardcoded default.
+    # Only touch disk when neither the per-call arg nor the env override is set —
+    # the synchronous read otherwise runs on the event loop on the hot connect path.
     _file_prompt = ""
-    try:
-        with open(_prompt_file, "r", encoding="utf-8") as _f:
-            _file_prompt = _f.read().strip()
-    except Exception as _e:
-        logger.warning(f"Could not read system_prompt.txt: {_e}")
+    if not system_prompt and not os.getenv("SYSTEM_PROMPT"):
+        _prompt_file = os.path.join(os.path.dirname(__file__), "system_prompt.txt")
+        try:
+            with open(_prompt_file, "r", encoding="utf-8") as _f:
+                _file_prompt = _f.read().strip()
+        except Exception as _e:
+            logger.warning(f"Could not read system_prompt.txt: {_e}")
 
     effective_prompt = (
         system_prompt
@@ -517,7 +610,24 @@ async def run_bot(
         or 'You are a helpful assistant. Greet the caller and assist them.'
     )
     effective_prompt = effective_prompt.replace("{customer_name}", customer_name or "the caller")
-    logger.info(f"System prompt source: {'arg' if system_prompt else 'env' if os.getenv('SYSTEM_PROMPT') else 'file' if _file_prompt else 'default'} ({len(effective_prompt)} chars) customer_name={customer_name!r}")
+
+    # Strip post-call-only sections (lead-extraction taxonomy / output schema) so
+    # the live model isn't billed for them every turn. extract_lead_fields handles
+    # that classification separately from the transcript after the call.
+    effective_prompt = trim_prompt_for_live(effective_prompt)
+
+    # When a pre-rendered greeting is played on connect, tell the live model the
+    # greeting ALREADY happened — otherwise it follows its START instruction and
+    # greets a second time after the caller's first reply.
+    if greeting_pcm and greeting_text:
+        effective_prompt += (
+            "\n\nCONVERSATION ALREADY STARTED:\n"
+            f'You have ALREADY greeted the caller out loud with this exact line: "{greeting_text}"\n'
+            "Do NOT greet again. Do NOT repeat your name, your company, or your opening question. "
+            "The caller is now responding to that greeting — reply directly and naturally to what they say next."
+        )
+
+    logger.info(f"System prompt source: {'arg' if system_prompt else 'env' if os.getenv('SYSTEM_PROMPT') else 'file' if _file_prompt else 'default'} ({len(effective_prompt)} chars) customer_name={customer_name!r} prerendered_greeting={bool(greeting_pcm)}")
 
     logger.info(f"Starting bot | stream_id={stream_id} call_id={call_id}")
 
@@ -562,17 +672,29 @@ async def run_bot(
 
     # ── Gemini Live ───────────────────────────────────────────────────────────
     logger.debug(f"system_instruction preview: {effective_prompt[:120]!r}")
+    # Optional model override. Unset → pipecat's default native-audio model.
+    # Set GEMINI_LIVE_MODEL to try a lower-latency half-cascade model, e.g.
+    # "gemini-2.0-flash-live-001" or "gemini-live-2.5-flash-preview".
+    _settings_kwargs = dict(
+        voice=voice or os.getenv("GEMINI_VOICE", "Puck"),  # Aoede | Charon | Fenrir | Kore | Leda | Orus | Puck | Zephyr
+        vad=GeminiVADParams(disabled=True),  # Silero owns all VAD
+        thinking=ThinkingConfig(thinking_budget=0),  # disable reasoning → low latency
+    )
+    _live_model = os.getenv("GEMINI_LIVE_MODEL")
+    if _live_model:
+        _settings_kwargs["model"] = _live_model
+        logger.info(f"Using GEMINI_LIVE_MODEL override: {_live_model}")
     llm = _PhoneBotGeminiService(
         api_key=os.getenv("GOOGLE_API_KEY"),
         system_instruction=effective_prompt,  # must be direct param — Settings path skips _system_instruction_from_init
-        settings=GeminiLiveLLMService.Settings(
-            voice=voice or os.getenv("GEMINI_VOICE", "Puck"),  # Aoede | Charon | Fenrir | Kore | Leda | Orus | Puck | Zephyr
-            vad=GeminiVADParams(
-                disabled=True,  # Silero owns all VAD
-            ),
-            thinking=ThinkingConfig(thinking_budget=0),  # disable reasoning → low latency
-        ),
+        settings=GeminiLiveLLMService.Settings(**_settings_kwargs),
     )
+
+    # Wire pre-rendered greeting: when a clip is available it is played on connect
+    # and its text is seeded into Gemini history (live greeting suppressed).
+    if greeting_pcm:
+        llm._greeting_prerendered = True
+        llm._greeting_text = greeting_text
 
     # ── Pipeline ──────────────────────────────────────────────────────────────
     pipeline = Pipeline(
@@ -599,6 +721,29 @@ async def run_bot(
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
         logger.info(f"Client connected | stream_id={stream_id}")
+        # Play the pre-rendered greeting the instant the call connects so the
+        # caller hears the bot immediately, while the Gemini Live session warms
+        # up in the background. Gemini takes over from the caller's first reply.
+        if greeting_pcm:
+            try:
+                rate = greeting_rate or 24000
+                await task.queue_frames([
+                    TTSStartedFrame(),
+                    TTSAudioRawFrame(audio=greeting_pcm, sample_rate=rate, num_channels=1),
+                    TTSStoppedFrame(),
+                ])
+                # Mark grace window start (audio plays BEFORE session is ready) and
+                # record the greeting in the transcript — a TTS clip produces no
+                # Gemini output_transcription, so lead extraction would miss it.
+                llm._greeting_started_time = time.monotonic()
+                if greeting_text:
+                    llm._transcript.append({"role": "bot", "text": greeting_text})
+                logger.info(
+                    f"[latency] played pre-rendered greeting "
+                    f"({len(greeting_pcm)} bytes @ {rate}Hz) on connect | stream_id={stream_id}"
+                )
+            except Exception as e:
+                logger.warning(f"Pre-rendered greeting playback failed (falling back to live): {e}")
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
